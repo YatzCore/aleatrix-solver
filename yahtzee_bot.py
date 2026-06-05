@@ -625,6 +625,9 @@ def choose_tablebase_move_with_score_fallback(
         action=action,
         target=target,
         evs=evs,
+        target_score=target_final_score,
+        player_total_score=player_total_score,
+        open_category_count=len(open_categories),
     ):
         fallback_solver = getattr(score_fallback_ai, "fallback_solver_name", "Expectiminimax")
         action, target, utility, evs = score_fallback_ai.get_optimal_move(

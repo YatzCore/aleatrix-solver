@@ -212,6 +212,65 @@ class YahtzeeSimulatorTests(unittest.TestCase):
         self.assertEqual(first_decision["tablebase_win_probability"], 0.0)
         self.assertEqual(fallback_ai.calls[0]["risk_level"], 0.0)
 
+    def test_tablebase_simulation_uses_score_fallback_when_endgame_target_is_high(self):
+        class HighWinTablebaseAI:
+            is_tablebase_ai = True
+
+            def get_optimal_move(
+                self,
+                open_categories,
+                current_dice,
+                rolls_left,
+                upper_sum,
+                yahtzee_scored=False,
+                target_final_score=None,
+                player_total_score=None,
+            ):
+                category = "chance" if "chance" in open_categories else open_categories[0]
+                return "score", category, 0.8, {category: 22}
+
+        class ScoreFallbackAI:
+            def __init__(self):
+                self.calls = []
+                self.fallback_solver_name = "Optuna Expectiminimax"
+
+            def get_optimal_move(
+                self,
+                open_categories,
+                current_dice,
+                rolls_left,
+                upper_sum,
+                yahtzee_scored=False,
+                risk_level=0.0,
+            ):
+                self.calls.append({
+                    "risk_level": risk_level,
+                    "open_count": len(open_categories),
+                })
+                category = "chance" if "chance" in open_categories else open_categories[0]
+                return "score", category, 22.0, {category: 22}
+
+        fallback_ai = ScoreFallbackAI()
+
+        result = play_solo_game(
+            HighWinTablebaseAI(),
+            seed=11,
+            target_score=315,
+            score_fallback_ai=fallback_ai,
+            tablebase_fallback_threshold=0.00001,
+        )
+
+        fallback_decisions = [
+            decision
+            for turn in result["turns"]
+            for decision in turn["decisions"]
+            if decision["score_fallback_used"]
+        ]
+
+        self.assertTrue(fallback_decisions)
+        self.assertTrue(any(decision["tablebase_target_score"] >= 260 for decision in fallback_decisions))
+        self.assertEqual(fallback_ai.calls[0]["risk_level"], 0.0)
+
     def test_tablebase_simulation_converts_keep_all_to_scoring_move(self):
         class KeepAllThenScoreAI:
             is_tablebase_ai = True

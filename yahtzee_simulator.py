@@ -162,6 +162,9 @@ def play_solo_game(
                         action=action,
                         target=target,
                         evs=evs,
+                        target_score=tablebase_target_score,
+                        player_total_score=current_total,
+                        open_category_count=len(open_categories),
                     )
                 ):
                     action, target, utility, evs = score_fallback_ai.get_optimal_move(

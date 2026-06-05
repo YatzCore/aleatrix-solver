@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 import yahtzee_bot
+from aleatrix_solver import tablebase_target
 from yahtzee_bot import (
     TablebaseAI,
     build_overlay_html,
@@ -118,6 +119,47 @@ class FakeSnapshotPage:
 
 
 class TablebaseIntegrationTests(unittest.TestCase):
+    def test_score_fallback_policy_uses_optimized_thresholds(self):
+        self.assertEqual(tablebase_target.TABLEBASE_SCORE_FALLBACK_THRESHOLD, 0.075)
+        self.assertEqual(getattr(tablebase_target, "TABLEBASE_TARGET_SCORE_FALLBACK_THRESHOLD", None), 260)
+        self.assertEqual(getattr(tablebase_target, "TABLEBASE_REQUIRED_AVG_FALLBACK_THRESHOLD", None), 22.0)
+
+        self.assertTrue(tablebase_target.should_use_score_fallback(0.075))
+        self.assertFalse(
+            tablebase_target.should_use_score_fallback(
+                0.076,
+                target_score=259,
+                player_total_score=238,
+                open_category_count=1,
+            )
+        )
+
+    def test_score_fallback_policy_uses_target_and_required_average_gates(self):
+        self.assertTrue(
+            tablebase_target.should_use_score_fallback(
+                0.8,
+                target_score=260,
+                player_total_score=250,
+                open_category_count=2,
+            )
+        )
+        self.assertTrue(
+            tablebase_target.should_use_score_fallback(
+                0.8,
+                target_score=259,
+                player_total_score=215,
+                open_category_count=2,
+            )
+        )
+        self.assertFalse(
+            tablebase_target.should_use_score_fallback(
+                0.8,
+                target_score=259,
+                player_total_score=216,
+                open_category_count=2,
+            )
+        )
+
     def test_inject_ui_overlay_uses_single_overlay_html_source(self):
         source = inspect.getsource(yahtzee_bot.inject_ui_overlay)
 
@@ -369,6 +411,39 @@ class TablebaseIntegrationTests(unittest.TestCase):
         self.assertTrue(result["score_fallback_used"])
         self.assertEqual(fallback_ai.calls[0]["rolls_left"], 0)
 
+    def test_high_target_score_uses_score_ev_fallback(self):
+        class HighWinTablebase:
+            def get_optimal_move(self, **kwargs):
+                return "keep", [6, 6], 0.8, {"sixes": 12}, 0.0003
+
+        class ScoreFallback:
+            def __init__(self):
+                self.calls = []
+
+            def get_optimal_move(self, **kwargs):
+                self.calls.append(kwargs)
+                return "score", "chance", 22.0, {"chance": 22}
+
+        fallback_ai = ScoreFallback()
+
+        result = yahtzee_bot.choose_tablebase_move_with_score_fallback(
+            tablebase_ai=HighWinTablebase(),
+            score_fallback_ai=fallback_ai,
+            open_categories=["sixes", "chance"],
+            current_dice=[6, 6, 3, 2, 1],
+            rolls_left=2,
+            upper_sum=12,
+            yahtzee_scored=False,
+            target_final_score=260,
+            player_total_score=250,
+            fallback_threshold=0.00001,
+        )
+
+        self.assertEqual(result["action"], "score")
+        self.assertEqual(result["target"], "chance")
+        self.assertTrue(result["score_fallback_used"])
+        self.assertEqual(fallback_ai.calls[0]["rolls_left"], 2)
+
     def test_nonzero_win_tablebase_move_does_not_use_score_ev_fallback(self):
         class LiveTablebase:
             def get_optimal_move(self, **kwargs):
@@ -392,8 +467,8 @@ class TablebaseIntegrationTests(unittest.TestCase):
             rolls_left=2,
             upper_sum=12,
             yahtzee_scored=False,
-            target_final_score=315,
-            player_total_score=140,
+            target_final_score=255,
+            player_total_score=230,
             fallback_threshold=0.00001,
         )
 

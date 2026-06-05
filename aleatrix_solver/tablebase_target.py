@@ -6,7 +6,9 @@ TABLEBASE_TARGET_MIN = 240
 TABLEBASE_TARGET_MAX = 315
 TABLEBASE_TARGET_HYSTERESIS = 15
 TABLEBASE_TARGET_ENDGAME_OPEN_COUNT = 4
-TABLEBASE_SCORE_FALLBACK_THRESHOLD = 0.00001
+TABLEBASE_SCORE_FALLBACK_THRESHOLD = 0.075
+TABLEBASE_TARGET_SCORE_FALLBACK_THRESHOLD = 260
+TABLEBASE_REQUIRED_AVG_FALLBACK_THRESHOLD = 22.0
 TABLEBASE_SCRATCH_FALLBACK_THRESHOLD = 0.05
 TABLEBASE_SCRATCH_FALLBACK_MIN_GAIN = 12
 
@@ -55,12 +57,36 @@ def should_use_score_fallback(
     action=None,
     target=None,
     evs=None,
+    target_score=None,
+    player_total_score=None,
+    open_category_count=None,
+    target_score_threshold=TABLEBASE_TARGET_SCORE_FALLBACK_THRESHOLD,
+    required_avg_threshold=TABLEBASE_REQUIRED_AVG_FALLBACK_THRESHOLD,
     scratch_threshold=TABLEBASE_SCRATCH_FALLBACK_THRESHOLD,
     scratch_min_gain=TABLEBASE_SCRATCH_FALLBACK_MIN_GAIN,
 ):
     win_probability = float(win_probability)
     if win_probability <= float(threshold):
         return True
+
+    target_score_value = _parse_float(target_score)
+    if (
+        target_score_value is not None
+        and target_score_value >= float(target_score_threshold)
+    ):
+        return True
+
+    player_total_value = _parse_float(player_total_score)
+    open_count_value = _parse_int(open_category_count)
+    if (
+        target_score_value is not None
+        and player_total_value is not None
+        and open_count_value is not None
+        and open_count_value > 0
+    ):
+        required_avg = (target_score_value - player_total_value) / open_count_value
+        if required_avg >= float(required_avg_threshold):
+            return True
 
     if action == "score" and isinstance(evs, dict) and target in evs:
         target_score = float(evs.get(target, 0))
@@ -73,3 +99,21 @@ def should_use_score_fallback(
             return True
 
     return False
+
+
+def _parse_float(value):
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_int(value):
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
