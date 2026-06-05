@@ -1,7 +1,7 @@
 import os
 import unittest
 
-from yahtzee_ai import CATEGORIES
+from aleatrix_solver.yahtzee_ai import CATEGORIES
 from yahtzee_bot import TablebaseAI, is_tablebase_ready
 
 

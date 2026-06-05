@@ -1,6 +1,6 @@
 import unittest
 
-from yahtzee_ai import YahtzeeAI
+from aleatrix_solver.yahtzee_ai import YahtzeeAI
 
 
 class YahtzeeAIEndgameTests(unittest.TestCase):
@@ -80,4 +80,3 @@ class YahtzeeAIEndgameTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

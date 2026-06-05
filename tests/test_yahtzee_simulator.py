@@ -1,6 +1,6 @@
 import unittest
 
-from yahtzee_ai import YahtzeeAI
+from aleatrix_solver.yahtzee_ai import YahtzeeAI
 from yahtzee_simulator import (
     compare_strategies_against_opponents,
     compare_strategies,

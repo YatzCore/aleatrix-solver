@@ -13,17 +13,17 @@ try:
     from playwright.sync_api import sync_playwright
 except ModuleNotFoundError:
     sync_playwright = None
-from yahtzee_ai import YahtzeeAI, CATEGORIES, get_score
-from game_history import BAD_HISTORY_PATH, GOOD_HISTORY_PATH, save_routed_game_log
-from match_strategy import choose_risk_level, project_opponent_score
-from opponent_history import build_opponent_profile
-from strategy_config import (
+from aleatrix_solver.yahtzee_ai import YahtzeeAI, CATEGORIES, get_score
+from aleatrix_solver.game_history import BAD_HISTORY_PATH, GOOD_HISTORY_PATH, save_routed_game_log
+from aleatrix_solver.match_strategy import choose_risk_level, project_opponent_score
+from aleatrix_solver.opponent_history import build_opponent_profile
+from aleatrix_solver.strategy_config import (
     STRATEGY_CONFIG_PATH,
     create_ai_from_config,
     create_tablebase_fallback_ai,
     load_strategy_config,
 )
-from tablebase_target import (
+from aleatrix_solver.tablebase_target import (
     TABLEBASE_SCORE_FALLBACK_THRESHOLD,
     choose_tablebase_target_score,
     get_stabilized_tablebase_target,

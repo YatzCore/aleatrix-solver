@@ -6,7 +6,7 @@ from evolve import (
     distribute_trials,
     rerank_top_trials_with_exact_dp,
 )
-from strategy_config import DEFAULT_STRATEGY_CONFIG
+from aleatrix_solver.strategy_config import DEFAULT_STRATEGY_CONFIG
 
 
 class EvolveTests(unittest.TestCase):

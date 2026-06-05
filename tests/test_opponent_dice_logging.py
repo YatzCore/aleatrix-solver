@@ -1,6 +1,6 @@
 import unittest
 
-from check_randomness import chi_square_p_value, extract_roll_groups
+from scripts.check_randomness import chi_square_p_value, extract_roll_groups
 from yahtzee_bot import append_unique_opponent_observation, make_opponent_observation
 
 

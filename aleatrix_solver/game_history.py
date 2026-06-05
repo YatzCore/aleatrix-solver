@@ -4,10 +4,10 @@ import os
 import shutil
 from pathlib import Path
 
-from opponent_history import is_valid_final_score, parse_int
+from aleatrix_solver.opponent_history import is_valid_final_score, parse_int
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 GOOD_HISTORY_PATH = os.environ.get(
     "YAHTZEE_GAME_HISTORY_PATH",
     str(PROJECT_ROOT / "game_history.jsonl"),

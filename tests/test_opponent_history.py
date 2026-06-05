@@ -3,8 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from match_strategy import choose_risk_level
-from opponent_history import build_opponent_profile, extract_match_scores, fit_opponent_projection_model
+from aleatrix_solver.match_strategy import choose_risk_level
+from aleatrix_solver.opponent_history import build_opponent_profile, extract_match_scores, fit_opponent_projection_model
 
 
 class OpponentHistoryTests(unittest.TestCase):

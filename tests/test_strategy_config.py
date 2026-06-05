@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import sqlite3
 
-from strategy_config import (
+from aleatrix_solver.strategy_config import (
     DEFAULT_STRATEGY_CONFIG,
     create_ai_from_config,
     create_tablebase_fallback_ai,

@@ -72,7 +72,7 @@ def build_steps(args, python_exe, cmake_exe, project_root):
     if not args.skip_tablebase:
         steps.append(Step("Download tablebase", [python_exe, "scripts/download_tablebase.py", "--repo-id", args.repo_id]))
     if not args.skip_tests:
-        steps.append(Step("Run Python tests", [python_exe, "-m", "unittest", "discover", "-v"]))
+        steps.append(Step("Run Python tests", [python_exe, "-m", "unittest", "discover", "-s", "tests", "-t", ".", "-v"]))
         steps.append(Step("Run C++ tests", [project_root / "cpp" / "build" / "Release" / "yahtzee_core_tests.exe"]))
 
     return steps

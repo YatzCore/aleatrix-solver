@@ -4,9 +4,9 @@ import os
 from pathlib import Path
 from statistics import mean
 
-from yahtzee_ai import CATEGORIES, UPPER_CATEGORIES, get_score
-from match_strategy import choose_risk_level, project_opponent_score
-from tablebase_target import (
+from aleatrix_solver.yahtzee_ai import CATEGORIES, UPPER_CATEGORIES, get_score
+from aleatrix_solver.match_strategy import choose_risk_level, project_opponent_score
+from aleatrix_solver.tablebase_target import (
     TABLEBASE_SCORE_FALLBACK_THRESHOLD,
     choose_tablebase_target_score,
     get_stabilized_tablebase_target,
@@ -329,7 +329,7 @@ def compare_strategies_against_opponents(
     projection_model=None,
     history_path=DEFAULT_HISTORY_PATH,
 ):
-    from opponent_history import build_opponent_profile
+    from aleatrix_solver.opponent_history import build_opponent_profile
     
     if validation_mode not in (VALIDATION_MODE_LIVE_LIKE, VALIDATION_MODE_ORACLE_TARGET):
         raise ValueError("validation_mode must be 'live-like' or 'oracle-target'")
@@ -422,7 +422,7 @@ def resolve_target_score(target_score, history_path):
     if history_path is None:
         return None
 
-    from opponent_history import build_opponent_profile
+    from aleatrix_solver.opponent_history import build_opponent_profile
 
     profile = build_opponent_profile(history_path)
     return profile["target_score"]
@@ -459,17 +459,17 @@ def parse_args():
 
 
 if __name__ == "__main__":
-    from yahtzee_ai import YahtzeeAI
+    from aleatrix_solver.yahtzee_ai import YahtzeeAI
 
     args = parse_args()
     target_score = resolve_target_score(args.target_score, args.history_path)
     opponent_scores = []
     if args.history_path:
-        from opponent_history import build_opponent_profile
+        from aleatrix_solver.opponent_history import build_opponent_profile
 
         opponent_scores = build_opponent_profile(args.history_path)["opponent_scores"]
     if args.tune_grid:
-        from strategy_config import save_strategy_config
+        from aleatrix_solver.strategy_config import save_strategy_config
         from strategy_tuner import build_strategy_grid, config_from_strategy_name, rank_strategy_summaries
 
         strategies = build_strategy_grid(parse_depth_specs(args.depths), parse_risk_specs(args.risks))

@@ -1,7 +1,7 @@
 import unittest
 
-from match_strategy import choose_risk_level, project_opponent_score
-from yahtzee_ai import CATEGORIES, YahtzeeAI
+from aleatrix_solver.match_strategy import choose_risk_level, project_opponent_score
+from aleatrix_solver.yahtzee_ai import CATEGORIES, YahtzeeAI
 
 
 class MatchStrategyTests(unittest.TestCase):
@@ -132,4 +132,3 @@ class MatchStrategyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

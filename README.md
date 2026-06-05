@@ -51,7 +51,7 @@ graph TD
     A[Yahtzee Browser Tab] <-->|Playwright| B([yahtzee_bot.py])
     B -->|ctypes| C([yahtzee_core.dll])
     C -->|memory map| D[tablebase.bin]
-    B --> E([tablebase_target.py])
+    B --> E([aleatrix_solver/tablebase_target.py])
     B --> F([YahtzeeAI fallback])
     G([yahtzee_simulator.py]) --> F
     H([evolve.py]) --> G
@@ -69,13 +69,13 @@ graph TD
 ## Repository Layout
 
 - [yahtzee_bot.py](yahtzee_bot.py): browser controller and tablebase integration.
-- [yahtzee_ai.py](yahtzee_ai.py): Python expectiminimax solver.
 - [yahtzee_simulator.py](yahtzee_simulator.py): local simulation runner.
-- [tablebase_target.py](tablebase_target.py): target-score stabilization rules.
-- [game_history.py](game_history.py): clean/quarantine routing for JSONL logs.
+- [evolve.py](evolve.py): Optuna-based strategy tuning entry point.
+- [strategy_tuner.py](strategy_tuner.py): deterministic grid-search strategy tools.
+- [aleatrix_solver/](aleatrix_solver/): reusable solver, strategy, tablebase-targeting, and history modules.
 - [cpp/](cpp/): C++ solver, DLL wrapper, generator, and core tests.
-- [scripts/setup_windows.py](scripts/setup_windows.py): one-command Windows setup.
-- [scripts/download_tablebase.py](scripts/download_tablebase.py): Hugging Face downloader.
+- [scripts/](scripts/): setup, tablebase download/upload, release, and maintenance utilities.
+- [tests/](tests/): Python unittest suite.
 - [docs/examples/game_history.sample.jsonl](docs/examples/game_history.sample.jsonl): sanitized example log.
 
 ## Manual Setup
@@ -132,7 +132,7 @@ panel to start or pause the controller.
 Run Python tests:
 
 ```powershell
-python -m unittest discover -v
+python -m unittest discover -s tests -t . -v
 ```
 
 Run C++ tests after building:

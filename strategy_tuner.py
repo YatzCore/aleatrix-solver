@@ -1,4 +1,4 @@
-from yahtzee_ai import YahtzeeAI
+from aleatrix_solver.yahtzee_ai import YahtzeeAI
 from yahtzee_simulator import summarize_match_results
 
 

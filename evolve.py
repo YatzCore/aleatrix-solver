@@ -1,7 +1,6 @@
 import argparse
 import os
 import random
-import sys
 from pathlib import Path
 try:
     import optuna
@@ -11,18 +10,15 @@ except ImportError:
     class TrialPrunedClass(Exception):
         pass
 
-# Ensure we can import modules from the current directory
-sys.path.append(str(Path(__file__).resolve().parent))
-
-from opponent_history import build_opponent_profile
-from yahtzee_ai import YahtzeeAI
+from aleatrix_solver.opponent_history import build_opponent_profile
+from aleatrix_solver.yahtzee_ai import YahtzeeAI
 from yahtzee_simulator import (
     VALIDATION_MODE_LIVE_LIKE,
     VALIDATION_MODE_ORACLE_TARGET,
     play_solo_game,
     repeat_opponent_scores,
 )
-from strategy_config import save_strategy_config, DEFAULT_STRATEGY_CONFIG
+from aleatrix_solver.strategy_config import save_strategy_config, DEFAULT_STRATEGY_CONFIG
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_HISTORY_PATH = os.environ.get(

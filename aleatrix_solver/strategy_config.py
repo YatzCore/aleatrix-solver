@@ -3,14 +3,14 @@ import os
 import sqlite3
 from pathlib import Path
 
-from yahtzee_ai import (
+from aleatrix_solver.yahtzee_ai import (
     ENDGAME_EXACT_CATEGORY_LIMIT,
     LOWER_ONLY_EXACT_CATEGORY_LIMIT,
     YahtzeeAI,
 )
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 STRATEGY_CONFIG_PATH = os.environ.get(
     "YAHTZEE_STRATEGY_CONFIG_PATH",
     str(PROJECT_ROOT / "strategy_config.json"),

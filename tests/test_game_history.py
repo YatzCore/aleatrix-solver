@@ -3,8 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from clean_game_history import parse_args
-from game_history import (
+from scripts.clean_game_history import parse_args
+from aleatrix_solver.game_history import (
     classify_game_record,
     clean_history_file,
     iter_jsonl_records,

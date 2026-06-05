@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from collections import Counter
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 GAME_HISTORY_PATH = os.environ.get(
     "YAHTZEE_GAME_HISTORY_PATH",
     str(PROJECT_ROOT / "game_history.jsonl"),

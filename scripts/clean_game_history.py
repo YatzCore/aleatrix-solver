@@ -1,6 +1,11 @@
 import argparse
+import sys
+from pathlib import Path
 
-from game_history import BAD_HISTORY_PATH, GOOD_HISTORY_PATH, clean_history_file
+if __package__ is None or __package__ == "":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from aleatrix_solver.game_history import BAD_HISTORY_PATH, GOOD_HISTORY_PATH, clean_history_file
 
 
 def parse_args(argv=None):

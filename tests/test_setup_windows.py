@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def load_setup_module():
-    path = Path(__file__).resolve().parent / "scripts" / "setup_windows.py"
+    path = Path(__file__).resolve().parents[1] / "scripts" / "setup_windows.py"
     spec = importlib.util.spec_from_file_location("setup_windows", path)
     module = importlib.util.module_from_spec(spec)
     sys.modules["setup_windows"] = module
