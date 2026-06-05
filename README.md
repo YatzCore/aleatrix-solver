@@ -9,6 +9,41 @@ win-probability lookups. For normal setup, download the precomputed tablebase
 from Hugging Face. For verification-minded users, the C++ generator remains in
 the repo as an advanced local rebuild path.
 
+## Quick Start for Windows
+
+Prerequisites:
+
+- Python 3.12+.
+- Git.
+- Visual Studio 2022 Build Tools with the C++ workload, or another CMake/MSVC setup.
+
+Clone and enter the repo:
+
+```powershell
+git clone https://github.com/YatzCore/aleatrix-solver.git
+cd aleatrix-solver
+```
+
+Run the setup script:
+
+```powershell
+python scripts/setup_windows.py
+```
+
+The script installs Python dependencies, installs Playwright Chromium, builds
+the C++ DLL, downloads the verified tablebase from Hugging Face, and runs the
+Python/C++ tests. If CMake is installed but not on `PATH`, pass it explicitly:
+
+```powershell
+python scripts/setup_windows.py --cmake "C:\Path\To\cmake.exe"
+```
+
+Start the standalone browser controller:
+
+```powershell
+python -u yahtzee_bot.py
+```
+
 ## Architecture
 
 ```mermaid
@@ -39,10 +74,11 @@ graph TD
 - [tablebase_target.py](tablebase_target.py): target-score stabilization rules.
 - [game_history.py](game_history.py): clean/quarantine routing for JSONL logs.
 - [cpp/](cpp/): C++ solver, DLL wrapper, generator, and core tests.
+- [scripts/setup_windows.py](scripts/setup_windows.py): one-command Windows setup.
 - [scripts/download_tablebase.py](scripts/download_tablebase.py): Hugging Face downloader.
 - [docs/examples/game_history.sample.jsonl](docs/examples/game_history.sample.jsonl): sanitized example log.
 
-## Setup
+## Manual Setup
 
 Install Python dependencies:
 

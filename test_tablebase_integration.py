@@ -1,4 +1,5 @@
 import ctypes
+import inspect
 import json
 import tempfile
 import unittest
@@ -117,6 +118,13 @@ class FakeSnapshotPage:
 
 
 class TablebaseIntegrationTests(unittest.TestCase):
+    def test_inject_ui_overlay_uses_single_overlay_html_source(self):
+        source = inspect.getsource(yahtzee_bot.inject_ui_overlay)
+
+        self.assertEqual(source.count("overlay_html ="), 1)
+        self.assertIn("overlay_html = build_overlay_html(", source)
+        self.assertNotIn("SOLVER_MODE", source)
+
     def test_visible_snapshot_normalizes_core_game_state_without_double_counting_totals(self):
         snapshot = {
             "rolls_left": 2,
