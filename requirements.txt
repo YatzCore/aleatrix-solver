@@ -1,0 +1,4 @@
+optuna>=4.0.0
+sqlalchemy>=2.0.0
+playwright>=1.44.0
+huggingface_hub>=0.32.0

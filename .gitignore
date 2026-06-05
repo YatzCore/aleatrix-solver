@@ -1,0 +1,43 @@
+__pycache__/
+*.py[cod]
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Optimization and runtime artifacts
+yahtzee_optuna.db*
+evolve_*.log
+evolve_*.out.log
+evolve_*.err.log
+evolve_*.pid
+evolve_*.command.txt
+game_history*.jsonl
+*.jsonl.bak
+*.sha256
+!docs/examples/
+!docs/examples/*.sample.jsonl
+
+# Browser inspection dumps and one-off analysis outputs
+lobby_inspect.png
+lobby_page.html
+sim_results.txt
+scratch/
+artifacts/
+dist/
+docs/superpowers/
+
+# C++ Build & Tablebase Binaries
+cpp/build/
+cpp/tablebase.bin
+*.bin
+*.dll
+*.exe
+*.lib
+*.exp
+*.pdb
+*.ilk
+*partial-test*

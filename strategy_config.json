@@ -1,0 +1,10 @@
+{
+  "bonus_multiplier": 35.38989289987336,
+  "chance_baseline": 22.078093593026765,
+  "decay_exponent": 0.9207505054215003,
+  "exact_category_limit": 4,
+  "lower_only_exact_category_limit": 5,
+  "opponent_risk_percentile": 85,
+  "risk_multiplier": 0.6375335820291455,
+  "yahtzee_baseline": 23.567091483420327
+}
