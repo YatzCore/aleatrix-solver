@@ -213,6 +213,27 @@ class TablebaseIntegrationTests(unittest.TestCase):
         self.assertIn("fives", get_open_categories_from_snapshot(snapshot, "0"))
         self.assertNotIn("chance", get_open_categories_from_snapshot(snapshot, "0"))
 
+    def test_scorecard_reconciliation_reopens_uncommitted_ui_categories(self):
+        reconcile = getattr(yahtzee_bot, "reconcile_scored_categories_from_snapshot", None)
+        self.assertIsNotNone(reconcile)
+
+        scored_categories = {"ones", "twos", "sixes", "chance"}
+        snapshot = {
+            "score_cells": {
+                "0": {
+                    "ones": {"text": "3", "classes": "scoreCell", "visible": True},
+                    "twos": {"text": "", "classes": "scoreCell tentative", "visible": True},
+                    "sixes": {"text": "", "classes": "scoreCell", "visible": True},
+                    "chance": {"text": "24", "classes": "scoreCell", "visible": False},
+                }
+            }
+        }
+
+        reopened = reconcile(scored_categories, snapshot, "0")
+
+        self.assertEqual(reopened, {"twos", "sixes"})
+        self.assertEqual(scored_categories, {"ones", "chance"})
+
     def test_user_player_id_does_not_drift_to_active_opponent_turn(self):
         yahtzee_bot.KNOWN_USER_PLAYER_ID = "0"
         page = FakeSnapshotPage({

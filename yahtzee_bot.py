@@ -403,6 +403,26 @@ def get_open_categories_from_snapshot(snapshot, player_id, scored_categories=Non
     return open_categories
 
 
+def reconcile_scored_categories_from_snapshot(scored_categories, snapshot, player_id):
+    cells = _snapshot_player_cells(snapshot, player_id)
+    reopened_categories = set()
+
+    for category in CATEGORIES:
+        cell = cells.get(category)
+        if not cell or cell.get("visible", True) is False:
+            continue
+
+        text = str(cell.get("text", "")).strip()
+        if text and not _is_tentative_cell(cell):
+            scored_categories.add(category)
+        else:
+            if category in scored_categories:
+                reopened_categories.add(category)
+            scored_categories.discard(category)
+
+    return reopened_categories
+
+
 def is_yahtzee_scored_from_snapshot(snapshot, player_id, scored_categories=None):
     cell = _snapshot_cell(snapshot, player_id, "yahtzee")
     if scored_categories is not None and "yahtzee" in scored_categories:
@@ -2023,13 +2043,14 @@ def play_game(page, ai, autoplay_start_time=None, score_fallback_ai=None, game_l
         # 3. Read current game state from one atomic visible-state snapshot.
         state_snapshot = snapshot_visible_game_state(page, player_id)
 
-        # Populate/update scored_categories set with permanently filled categories
-        player_cells = _snapshot_player_cells(state_snapshot, player_id)
-        for category in CATEGORIES:
-            cell = player_cells.get(category, {})
-            text = str(cell.get("text", "")).strip()
-            if text != "" and not _is_tentative_cell(cell):
-                scored_categories.add(category)
+        reopened_categories = reconcile_scored_categories_from_snapshot(
+            scored_categories,
+            state_snapshot,
+            player_id,
+        )
+        if reopened_categories:
+            reopened = ", ".join(sorted(reopened_categories))
+            print(f"Scorecard UI reopened uncommitted categories: {reopened}")
 
         rolls_left = read_rolls_left_from_snapshot(state_snapshot)
         if rolls_left is None:
@@ -2337,7 +2358,6 @@ def play_game(page, ai, autoplay_start_time=None, score_fallback_ai=None, game_l
             time.sleep(random.uniform(0.5, 1.2))
             cell_selector = f"#scores td[data-cell='{target}'][data-player='{player_id}']"
             click_game_element(page, cell_selector)
-            scored_categories.add(target)
             time.sleep(1.0)
 
         elif action == 'keep':
