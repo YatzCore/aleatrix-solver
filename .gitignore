@@ -25,6 +25,8 @@ game_history*.jsonl
 lobby_inspect.png
 lobby_page.html
 sim_results.txt
+simulation_results*.json
+logs/
 scratch/
 artifacts/
 dist/

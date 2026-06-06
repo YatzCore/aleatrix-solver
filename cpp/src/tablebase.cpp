@@ -516,6 +516,105 @@ int Tablebase::get_optimal_move(
     }
 }
 
+int Tablebase::get_ranked_moves(
+    const GameState& state,
+    const Dice& current_dice,
+    int rolls_left,
+    RankedMove* out_moves
+) const {
+    int c = dice_data_.get_index(current_dice);
+    uint16_t mask = state.category_mask;
+    uint8_t u = state.upper_sum;
+    uint8_t y = state.yahtzee_scored;
+    uint16_t d = state.score_to_beat;
+
+    std::vector<int> open_cats;
+    open_cats.reserve(13);
+    for (int cat = 0; cat < 13; ++cat) {
+        if ((mask >> cat) & 1) {
+            open_cats.push_back(cat);
+        }
+    }
+
+    std::vector<RankedMove> moves;
+
+    // 1. Evaluate all legal scoring actions
+    for (int cat : open_cats) {
+        const Dice& dice = dice_data_.get_combinations()[c];
+        ScoreTransition transition = apply_score_transition(cat, dice, u, y == 1, d);
+
+        uint16_t next_mask = mask ^ (1 << cat);
+        uint64_t next_idx = (((static_cast<uint64_t>(next_mask) * 106 + transition.next_upper_sum) * 2 + transition.next_yahtzee_scored) * 401 + transition.next_score_to_beat);
+        double wp = data_[next_idx];
+        moves.push_back({0, cat, wp});
+    }
+
+    // 2. Evaluate all legal unique keep actions (if rolls left)
+    if (rolls_left > 0) {
+        // Compute V_score for all 252 combinations in this state
+        std::vector<double> V_score(252, 0.0);
+        for (int c_idx = 0; c_idx < 252; ++c_idx) {
+            double max_val = -1.0;
+            for (int cat : open_cats) {
+                const Dice& dice = dice_data_.get_combinations()[c_idx];
+                ScoreTransition transition = apply_score_transition(cat, dice, u, y == 1, d);
+
+                uint16_t next_mask = mask ^ (1 << cat);
+                uint64_t next_idx = (((static_cast<uint64_t>(next_mask) * 106 + transition.next_upper_sum) * 2 + transition.next_yahtzee_scored) * 401 + transition.next_score_to_beat);
+                double val = data_[next_idx];
+                if (val > max_val) {
+                    max_val = val;
+                }
+            }
+            V_score[c_idx] = max_val;
+        }
+
+        std::vector<double> current_values;
+        if (rolls_left == 1) {
+            current_values = V_score;
+        } else { // rolls_left == 2
+            std::vector<double> V_2(252, 0.0);
+            for (int c_idx = 0; c_idx < 252; ++c_idx) {
+                const auto& unique_masks = unique_masks_by_dice_[c_idx];
+                double max_val = 0.0;
+                for (int m : unique_masks) {
+                    double sum = 0.0;
+                    for (const auto& entry : sparse_transitions_[c_idx * 32 + m]) {
+                        sum += entry.prob * V_score[entry.next_c];
+                    }
+                    if (sum > max_val) {
+                        max_val = sum;
+                    }
+                }
+                V_2[c_idx] = max_val;
+            }
+            current_values = V_2;
+        }
+
+        const auto& unique_masks = unique_masks_by_dice_[c];
+        for (int m : unique_masks) {
+            double sum = 0.0;
+            for (const auto& entry : sparse_transitions_[c * 32 + m]) {
+                sum += entry.prob * current_values[entry.next_c];
+            }
+            moves.push_back({1, m, sum});
+        }
+    }
+
+    // Sort moves descending by WP
+    std::sort(moves.begin(), moves.end(), [](const RankedMove& a, const RankedMove& b) {
+        return a.wp > b.wp;
+    });
+
+    // Populate output array
+    int count = static_cast<int>(moves.size());
+    for (int i = 0; i < count; ++i) {
+        out_moves[i] = moves[i];
+    }
+
+    return count;
+}
+
 bool Tablebase::save(const std::string& filepath, int solved_layer) const {
     std::cout << "Saving tablebase binary to: " << filepath << "..." << std::endl;
     std::ofstream out(filepath, std::ios::binary);

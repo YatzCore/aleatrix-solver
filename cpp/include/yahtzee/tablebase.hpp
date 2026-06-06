@@ -40,6 +40,12 @@ bool validate_tablebase_file(
     std::string& error
 );
 
+struct RankedMove {
+    int action_type; // 0 = score, 1 = keep
+    int target_idx;  // category index or keep mask
+    double wp;
+};
+
 class Tablebase {
 public:
     Tablebase(
@@ -70,6 +76,15 @@ public:
         int& out_target_cat_idx,
         int& out_target_keep_mask,
         double& out_ev
+    ) const;
+
+    // Evaluates all legal moves, sorted by win probability descending.
+    // Returns the number of moves populated.
+    int get_ranked_moves(
+        const GameState& state,
+        const Dice& current_dice,
+        int rolls_left,
+        RankedMove* out_moves // preallocated array of size >= 45
     ) const;
 
     // Save/Load to/from disk

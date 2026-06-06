@@ -60,6 +60,7 @@ def should_use_score_fallback(
     target_score=None,
     player_total_score=None,
     open_category_count=None,
+    open_categories=None,
     target_score_threshold=TABLEBASE_TARGET_SCORE_FALLBACK_THRESHOLD,
     required_avg_threshold=TABLEBASE_REQUIRED_AVG_FALLBACK_THRESHOLD,
     scratch_threshold=TABLEBASE_SCRATCH_FALLBACK_THRESHOLD,
@@ -78,6 +79,11 @@ def should_use_score_fallback(
 
     player_total_value = _parse_float(player_total_score)
     open_count_value = _parse_int(open_category_count)
+    if open_count_value is None and open_categories is not None:
+        try:
+            open_count_value = len(open_categories)
+        except TypeError:
+            open_count_value = _parse_int(open_categories)
     if (
         target_score_value is not None
         and player_total_value is not None

@@ -387,10 +387,12 @@ def get_upper_sum_from_snapshot(snapshot, player_id):
     return compute_upper_sum_from_score_cells(upper_cells, displayed_sum=displayed_sum)
 
 
-def get_open_categories_from_snapshot(snapshot, player_id):
+def get_open_categories_from_snapshot(snapshot, player_id, scored_categories=None):
     cells = _snapshot_player_cells(snapshot, player_id)
     open_categories = []
     for category in CATEGORIES:
+        if scored_categories is not None and category in scored_categories:
+            continue
         cell = cells.get(category)
         if not cell:
             continue
@@ -401,8 +403,10 @@ def get_open_categories_from_snapshot(snapshot, player_id):
     return open_categories
 
 
-def is_yahtzee_scored_from_snapshot(snapshot, player_id):
+def is_yahtzee_scored_from_snapshot(snapshot, player_id, scored_categories=None):
     cell = _snapshot_cell(snapshot, player_id, "yahtzee")
+    if scored_categories is not None and "yahtzee" in scored_categories:
+        return parse_score_text(cell.get("text", "")) == 50
     return (
         parse_score_text(cell.get("text", "")) == 50
         and not _is_tentative_cell(cell)
@@ -473,6 +477,13 @@ def keep_values_from_mask(current_dice, target_mask):
     sorted_dice = sorted(int(die) for die in current_dice)
     return [sorted_dice[i] for i in range(5) if (int(target_mask) >> i) & 1]
 
+class RankedMove(ctypes.Structure):
+    _fields_ = [
+        ("action_type", ctypes.c_int),
+        ("target_idx", ctypes.c_int),
+        ("wp", ctypes.c_double),
+    ]
+
 class TablebaseAI:
     is_tablebase_ai = True
 
@@ -499,6 +510,27 @@ class TablebaseAI:
             ctypes.POINTER(ctypes.c_double)       # out_ev
         ]
         self.lib.get_optimal_move_dll.restype = ctypes.c_int
+
+        self.lib.get_ranked_moves_dll.argtypes = [
+            ctypes.c_void_p,                      # ctx
+            ctypes.c_uint16,                      # mask
+            ctypes.c_uint8,                       # upper_sum
+            ctypes.c_uint8,                       # yahtzee_scored
+            ctypes.c_uint16,                      # D
+            ctypes.c_uint8,                       # rolls_left
+            ctypes.POINTER(ctypes.c_int),         # current_dice (5 element array)
+            ctypes.POINTER(RankedMove)            # out_moves (preallocated array)
+        ]
+        self.lib.get_ranked_moves_dll.restype = ctypes.c_int
+
+        self.lib.get_state_value_dll.argtypes = [
+            ctypes.c_void_p,                      # ctx
+            ctypes.c_uint16,                      # mask
+            ctypes.c_uint8,                       # upper_sum
+            ctypes.c_uint8,                       # yahtzee_scored
+            ctypes.c_uint16,                      # D
+        ]
+        self.lib.get_state_value_dll.restype = ctypes.c_double
 
         # Initialize the solver context (will memory map the tablebase file)
         self.ctx = self.lib.init_solver(bin_path.encode('utf-8'))
@@ -578,6 +610,73 @@ class TablebaseAI:
 
         return action, target, utility, evs, t_lookup
 
+    def get_state_value(
+        self,
+        open_categories,
+        upper_sum,
+        yahtzee_scored,
+        target_final_score,
+        player_total_score,
+    ):
+        CATEGORY_INDEX = {cat: i for i, cat in enumerate(CATEGORIES)}
+        mask = 0
+        for cat in open_categories:
+            mask |= (1 << CATEGORY_INDEX[cat])
+        clean_upper_sum = max(0, min(105, int(upper_sum)))
+        D = compute_tablebase_score_to_beat(target_final_score, player_total_score, clean_upper_sum)
+        val = self.lib.get_state_value_dll(
+            self.ctx,
+            mask,
+            clean_upper_sum,
+            1 if yahtzee_scored else 0,
+            D
+        )
+        return float(val)
+
+    def get_ranked_moves(
+        self,
+        open_categories,
+        current_dice,
+        rolls_left,
+        upper_sum,
+        yahtzee_scored,
+        target_final_score,
+        player_total_score,
+    ):
+        CATEGORY_INDEX = {cat: i for i, cat in enumerate(CATEGORIES)}
+        mask = 0
+        for cat in open_categories:
+            mask |= (1 << CATEGORY_INDEX[cat])
+        clean_upper_sum = max(0, min(105, int(upper_sum)))
+        D = compute_tablebase_score_to_beat(target_final_score, player_total_score, clean_upper_sum)
+        clean_rolls_left = int(rolls_left)
+
+        c_dice = (ctypes.c_int * 5)(*current_dice)
+        out_moves = (RankedMove * 45)()
+
+        count = self.lib.get_ranked_moves_dll(
+            self.ctx,
+            mask,
+            clean_upper_sum,
+            1 if yahtzee_scored else 0,
+            D,
+            clean_rolls_left,
+            c_dice,
+            out_moves
+        )
+
+        result = []
+        for i in range(count):
+            result.append({
+                "action_type": int(out_moves[i].action_type),
+                "target_idx": int(out_moves[i].target_idx),
+                "wp": float(out_moves[i].wp),
+            })
+        return result
+
+
+
+
 
 def choose_tablebase_move_with_score_fallback(
     tablebase_ai,
@@ -627,7 +726,7 @@ def choose_tablebase_move_with_score_fallback(
         evs=evs,
         target_score=target_final_score,
         player_total_score=player_total_score,
-        open_category_count=len(open_categories),
+        open_categories=open_categories,
     ):
         fallback_solver = getattr(score_fallback_ai, "fallback_solver_name", "Expectiminimax")
         action, target, utility, evs = score_fallback_ai.get_optimal_move(
@@ -672,6 +771,191 @@ def choose_tablebase_move_with_score_fallback(
         "fallback_solver": None,
     }
 
+def choose_unified_move(
+    tablebase_ai,
+    score_fallback_ai,
+    open_categories,
+    current_dice,
+    rolls_left,
+    upper_sum,
+    yahtzee_scored,
+    target_final_score,
+    player_total_score,
+    epsilon="dynamic_v1",
+):
+    import time
+    from yahtzee_simulator import get_epsilon_value
+
+    start_time = time.perf_counter()
+    tablebase_lookup_seconds = 0.0
+
+    # 1. Get ranked moves from C++
+    lookup_start = time.perf_counter()
+    ranked_moves = tablebase_ai.get_ranked_moves(
+        open_categories=open_categories,
+        current_dice=current_dice,
+        rolls_left=rolls_left,
+        upper_sum=upper_sum,
+        yahtzee_scored=yahtzee_scored,
+        target_final_score=target_final_score,
+        player_total_score=player_total_score,
+    )
+    tablebase_lookup_seconds += time.perf_counter() - lookup_start
+
+    if not ranked_moves:
+        return choose_tablebase_move_with_score_fallback(
+            tablebase_ai,
+            score_fallback_ai,
+            open_categories,
+            current_dice,
+            rolls_left,
+            upper_sum,
+            yahtzee_scored,
+            target_final_score,
+            player_total_score,
+        )
+
+    best_wp_move = ranked_moves[0]
+    best_wp = best_wp_move["wp"]
+    current_epsilon = get_epsilon_value(epsilon, best_wp)
+
+    # Filter candidates
+    candidates = [
+        m for m in ranked_moves
+        if best_wp - m["wp"] <= current_epsilon + 1e-12
+    ]
+
+    num_candidates = len(candidates)
+    ev_calls = 0
+    wp_changed = False
+
+    for m in candidates:
+        ev_val = score_fallback_ai.evaluate_action_ev(
+            open_categories=open_categories,
+            current_dice=current_dice,
+            rolls_left=rolls_left,
+            upper_sum=upper_sum,
+            yahtzee_scored=yahtzee_scored,
+            action_type=m["action_type"],
+            target_idx=m["target_idx"],
+            risk_level=0.0
+        )
+        m["ev"] = ev_val
+        ev_calls += 1
+
+    best_candidate = max(candidates, key=lambda m: m["ev"])
+
+    # Calculate metrics
+    tablebase_action_ev = best_wp_move.get("ev", -999999.0)
+    chosen_action_ev = best_candidate["ev"]
+    ev_gain = chosen_action_ev - tablebase_action_ev
+    wp_drop = best_wp - best_candidate["wp"]
+
+    wp_changed = (
+        best_candidate["target_idx"] != best_wp_move["target_idx"]
+        or best_candidate["action_type"] != best_wp_move["action_type"]
+    )
+
+    if best_candidate["action_type"] == 0:
+        action = "score"
+        target = CATEGORIES[best_candidate["target_idx"]]
+    else:
+        action = "keep"
+        target_mask = best_candidate["target_idx"]
+        target = keep_values_from_mask(current_dice, target_mask)
+
+    full_keep_converted = False
+
+    # 5-die keep to score conversion
+    if action == "keep" and len(target) == 5:
+        lookup_start = time.perf_counter()
+        rolls_0_moves = tablebase_ai.get_ranked_moves(
+            open_categories=open_categories,
+            current_dice=current_dice,
+            rolls_left=0,
+            upper_sum=upper_sum,
+            yahtzee_scored=yahtzee_scored,
+            target_final_score=target_final_score,
+            player_total_score=player_total_score,
+        )
+        tablebase_lookup_seconds += time.perf_counter() - lookup_start
+        if rolls_0_moves:
+            candidates_0 = [
+                m for m in rolls_0_moves
+                if best_wp - m["wp"] <= current_epsilon + 1e-12
+            ]
+
+            if candidates_0:
+                for m in candidates_0:
+                    ev_val = score_fallback_ai.evaluate_action_ev(
+                        open_categories=open_categories,
+                        current_dice=current_dice,
+                        rolls_left=0,
+                        upper_sum=upper_sum,
+                        yahtzee_scored=yahtzee_scored,
+                        action_type=m["action_type"],
+                        target_idx=m["target_idx"],
+                        risk_level=0.0
+                    )
+                    m["ev"] = ev_val
+                    ev_calls += 1
+
+                best_candidate_0 = max(candidates_0, key=lambda m: m["ev"])
+                best_wp_move_0 = rolls_0_moves[0]
+                if "ev" not in best_wp_move_0:
+                    best_wp_move_0["ev"] = score_fallback_ai.evaluate_action_ev(
+                        open_categories=open_categories,
+                        current_dice=current_dice,
+                        rolls_left=0,
+                        upper_sum=upper_sum,
+                        yahtzee_scored=yahtzee_scored,
+                        action_type=best_wp_move_0["action_type"],
+                        target_idx=best_wp_move_0["target_idx"],
+                        risk_level=0.0,
+                    )
+                    ev_calls += 1
+                tablebase_action_ev = best_wp_move_0["ev"]
+                chosen_action_ev = best_candidate_0["ev"]
+                ev_gain = chosen_action_ev - tablebase_action_ev
+                wp_drop = best_wp - best_candidate_0["wp"]
+
+                wp_changed = wp_changed or (
+                    best_candidate_0["target_idx"] != best_wp_move_0["target_idx"]
+                    or best_candidate_0["action_type"] != best_wp_move_0["action_type"]
+                )
+
+                action = "score"
+                target = CATEGORIES[best_candidate_0["target_idx"]]
+                best_candidate = best_candidate_0
+                num_candidates = len(candidates_0)
+                full_keep_converted = True
+
+    latency = time.perf_counter() - start_time
+    print(f"[Unified Solver] Latency: {latency*1000:.2f}ms | Candidates Shortlisted: {num_candidates} | "
+          f"WP Drop: {wp_drop:.5f} | EV Gain: {ev_gain:+.2f} | WP Changed: {wp_changed} | "
+          f"Action: {action} | Target: {target}", flush=True)
+
+    return {
+        "action": action,
+        "target": target,
+        "utility": best_candidate["wp"],
+        "evs": {target: get_score(target, current_dice, yahtzee_scored)} if action == "score" else {},
+        "t_lookup": tablebase_lookup_seconds,
+        "decision_latency_seconds": latency,
+        "tablebase_win_probability": best_wp,
+        "score_fallback_used": False,
+        "wp_changed": wp_changed,
+        "full_keep_converted": full_keep_converted,
+        "fallback_solver": "Unified Evaluator" if wp_changed else None,
+        "chosen_action_ev": chosen_action_ev,
+        "tablebase_action_ev": tablebase_action_ev,
+        "wp_drop": wp_drop,
+        "ev_gain": ev_gain,
+        "num_candidates": num_candidates,
+        "epsilon": current_epsilon,
+    }
+
+
 GAME_HISTORY_PATH = GOOD_HISTORY_PATH
 BAD_GAME_HISTORY_PATH = BAD_HISTORY_PATH
 AUTOPLAY = False
@@ -683,10 +967,17 @@ class RestartException(Exception):
 def parse_args():
     parser = argparse.ArgumentParser(description="Solitaired Yahtzee AI Bot (Multiplayer-Ready & Robust)")
     parser.add_argument(
+        "--solver-mode",
+        choices=["hybrid", "unified"],
+        default="hybrid",
+        help="Solver mode for decision making: hybrid (fallback) or unified (dynamic epsilon)."
+    )
+    parser.add_argument(
         "--connect",
         action="store_true",
         help="Connect to an existing Chrome browser running with --remote-debugging-port=9222"
     )
+
     parser.add_argument(
         "--port",
         type=int,
@@ -1486,14 +1777,14 @@ def handle_lobby_and_queue(page, timeout=25.0):
             if player_count > 0:
                 if not hasattr(handle_lobby_and_queue, "challenged_history"):
                     handle_lobby_and_queue.challenged_history = {}
-                
+
                 # Clean up history older than 5 minutes (300s)
                 now = time.time()
                 handle_lobby_and_queue.challenged_history = {
                     name: ts for name, ts in handle_lobby_and_queue.challenged_history.items()
                     if now - ts < 300
                 }
-                
+
                 # Gather all visible players and their names
                 candidates = []
                 for i in range(player_count):
@@ -1504,11 +1795,11 @@ def handle_lobby_and_queue(page, timeout=25.0):
                         except Exception:
                             name = "online player"
                         candidates.append((player_link, name))
-                
+
                 if candidates:
                     # Filter candidates: prefer ones not challenged in the last 300 seconds
                     untried = [c for c in candidates if c[1] not in handle_lobby_and_queue.challenged_history]
-                    
+
                     if untried:
                         # Choose randomly from untried candidates to distribute invitations
                         chosen_link, chosen_name = random.choice(untried)
@@ -1518,7 +1809,7 @@ def handle_lobby_and_queue(page, timeout=25.0):
                             candidates,
                             key=lambda c: handle_lobby_and_queue.challenged_history.get(c[1], 0)
                         )
-                    
+
                     safe_name = chosen_name.encode('ascii', errors='replace').decode('ascii')
                     print(f"Lobby: Selected '{safe_name}' to challenge (avoiding spamming). Sending invite...")
                     click_game_element(page, chosen_link)
@@ -1555,11 +1846,12 @@ def count_completed_games_since(history_path, start_timestamp_float):
         pass
     return count
 
-def play_game(page, ai, autoplay_start_time=None, score_fallback_ai=None, game_limit=None, challenge_timeout=25.0):
+def play_game(page, ai, autoplay_start_time=None, score_fallback_ai=None, game_limit=None, challenge_timeout=25.0, solver_mode="hybrid"):
     print("\n--- Starting Yahtzee Game Session (Paused initially) ---")
 
     update_ui_win_probability(page, None)
     current_turns = []
+    scored_categories = set()
     opponent_observations = []
     game_started_time = None
     current_tablebase_target = None
@@ -1568,7 +1860,7 @@ def play_game(page, ai, autoplay_start_time=None, score_fallback_ai=None, game_l
     projection_model = opponent_profile.get("projection_model")
     strategy_config = load_strategy_config(STRATEGY_CONFIG_PATH)
     opponent_risk_percentile = strategy_config.get("opponent_risk_percentile", 75)
-    
+
     games_completed = 0
     if autoplay_start_time is not None:
         games_completed = count_completed_games_since(GAME_HISTORY_PATH, autoplay_start_time)
@@ -1678,6 +1970,7 @@ def play_game(page, ai, autoplay_start_time=None, score_fallback_ai=None, game_l
                 strategy_config = load_strategy_config(STRATEGY_CONFIG_PATH)
                 opponent_risk_percentile = strategy_config.get("opponent_risk_percentile", 75)
                 current_turns = []
+                scored_categories = set()
                 opponent_observations = []
                 game_started_time = None
                 current_tablebase_target = None
@@ -1729,14 +2022,23 @@ def play_game(page, ai, autoplay_start_time=None, score_fallback_ai=None, game_l
 
         # 3. Read current game state from one atomic visible-state snapshot.
         state_snapshot = snapshot_visible_game_state(page, player_id)
+
+        # Populate/update scored_categories set with permanently filled categories
+        player_cells = _snapshot_player_cells(state_snapshot, player_id)
+        for category in CATEGORIES:
+            cell = player_cells.get(category, {})
+            text = str(cell.get("text", "")).strip()
+            if text != "" and not _is_tentative_cell(cell):
+                scored_categories.add(category)
+
         rolls_left = read_rolls_left_from_snapshot(state_snapshot)
         if rolls_left is None:
             time.sleep(1)
             continue
 
-        open_cats = get_open_categories_from_snapshot(state_snapshot, player_id)
+        open_cats = get_open_categories_from_snapshot(state_snapshot, player_id, scored_categories=scored_categories)
         upper_sum = get_upper_sum_from_snapshot(state_snapshot, player_id)
-        y_scored = is_yahtzee_scored_from_snapshot(state_snapshot, player_id)
+        y_scored = is_yahtzee_scored_from_snapshot(state_snapshot, player_id, scored_categories=scored_categories)
 
         if not open_cats:
             print("No open categories left. Waiting for game to end...")
@@ -1844,17 +2146,31 @@ def play_game(page, ai, autoplay_start_time=None, score_fallback_ai=None, game_l
 
         if isinstance(ai, TablebaseAI):
             current_tablebase_target = tablebase_target_score
-            move = choose_tablebase_move_with_score_fallback(
-                tablebase_ai=ai,
-                score_fallback_ai=score_fallback_ai,
-                open_categories=open_cats,
-                current_dice=current_dice,
-                rolls_left=rolls_left,
-                upper_sum=upper_sum,
-                yahtzee_scored=y_scored,
-                target_final_score=tablebase_target_score,
-                player_total_score=user_sc,
-            )
+            if solver_mode == "unified":
+                move = choose_unified_move(
+                    tablebase_ai=ai,
+                    score_fallback_ai=score_fallback_ai,
+                    open_categories=open_cats,
+                    current_dice=current_dice,
+                    rolls_left=rolls_left,
+                    upper_sum=upper_sum,
+                    yahtzee_scored=y_scored,
+                    target_final_score=tablebase_target_score,
+                    player_total_score=user_sc,
+                    epsilon="dynamic_v1",
+                )
+            else:
+                move = choose_tablebase_move_with_score_fallback(
+                    tablebase_ai=ai,
+                    score_fallback_ai=score_fallback_ai,
+                    open_categories=open_cats,
+                    current_dice=current_dice,
+                    rolls_left=rolls_left,
+                    upper_sum=upper_sum,
+                    yahtzee_scored=y_scored,
+                    target_final_score=tablebase_target_score,
+                    player_total_score=user_sc,
+                )
             action = move["action"]
             target = move["target"]
             utility = move["utility"]
@@ -1862,9 +2178,13 @@ def play_game(page, ai, autoplay_start_time=None, score_fallback_ai=None, game_l
             t_lookup = move["t_lookup"]
             tablebase_win_probability = move["tablebase_win_probability"]
             score_fallback_used = move["score_fallback_used"]
+            wp_changed = move.get("wp_changed", False)
             full_keep_converted = move["full_keep_converted"]
             fallback_solver = move.get("fallback_solver")
-            update_ui_win_probability(page, tablebase_win_probability if not score_fallback_used else None)
+            if solver_mode == "unified":
+                update_ui_win_probability(page, utility)
+            else:
+                update_ui_win_probability(page, tablebase_win_probability if not score_fallback_used else None)
         else:
             action, target, utility, evs = ai.get_optimal_move(
                 open_categories=open_cats,
@@ -1877,6 +2197,7 @@ def play_game(page, ai, autoplay_start_time=None, score_fallback_ai=None, game_l
             t_lookup = None
             tablebase_win_probability = None
             score_fallback_used = False
+            wp_changed = False
             full_keep_converted = False
             fallback_solver = None
             update_ui_win_probability(page, None)
@@ -1892,6 +2213,7 @@ def play_game(page, ai, autoplay_start_time=None, score_fallback_ai=None, game_l
             "tablebase_target_score": tablebase_target_score,
             "tablebase_win_probability": tablebase_win_probability,
             "score_fallback_used": score_fallback_used,
+            "wp_changed": wp_changed,
             "full_keep_converted": full_keep_converted,
             "fallback_solver": fallback_solver,
             "projected_opponent_score": projected_opp_score,
@@ -2015,6 +2337,7 @@ def play_game(page, ai, autoplay_start_time=None, score_fallback_ai=None, game_l
             time.sleep(random.uniform(0.5, 1.2))
             cell_selector = f"#scores td[data-cell='{target}'][data-player='{player_id}']"
             click_game_element(page, cell_selector)
+            scored_categories.add(target)
             time.sleep(1.0)
 
         elif action == 'keep':
@@ -2175,7 +2498,7 @@ def main():
                         else:
                             print("Ready! Bot is paused on startup. Click 'Start / Resume' on the webpage to begin.")
 
-                        play_game(page, ai, autoplay_start_time=autoplay_start_time, score_fallback_ai=score_fallback_ai, game_limit=args.game_limit, challenge_timeout=args.challenge_timeout)
+                        play_game(page, ai, autoplay_start_time=autoplay_start_time, score_fallback_ai=score_fallback_ai, game_limit=args.game_limit, challenge_timeout=args.challenge_timeout, solver_mode=args.solver_mode)
                         # If play_game finishes naturally (which it doesn't, but for clean logic), exit
                         should_restart = False
                     except RestartException:

@@ -133,3 +133,39 @@ DLL_EXPORT int get_optimal_move_dll(
 
     return action; // 0 for 'score', 1 for 'keep'
 }
+
+DLL_EXPORT int get_ranked_moves_dll(
+    void* ctx,
+    uint16_t mask,
+    uint8_t upper_sum,
+    uint8_t yahtzee_scored,
+    uint16_t D,
+    uint8_t rolls_left,
+    const int* current_dice,
+    yahtzee::RankedMove* out_moves
+) {
+    if (!ctx) return -1;
+    auto solver_ctx = static_cast<SolverContext*>(ctx);
+
+    yahtzee::GameState state{mask, upper_sum, yahtzee_scored, D};
+    yahtzee::Dice dice;
+    for (int i = 0; i < 5; ++i) {
+        dice[i] = current_dice[i];
+    }
+    std::sort(dice.begin(), dice.end());
+
+    return solver_ctx->tablebase->get_ranked_moves(state, dice, rolls_left, out_moves);
+}
+
+DLL_EXPORT double get_state_value_dll(
+    void* ctx,
+    uint16_t mask,
+    uint8_t upper_sum,
+    uint8_t yahtzee_scored,
+    uint16_t D
+) {
+    if (!ctx) return -1.0;
+    auto solver_ctx = static_cast<SolverContext*>(ctx);
+    yahtzee::GameState state{mask, upper_sum, yahtzee_scored, D};
+    return solver_ctx->tablebase->get_value(state);
+}

@@ -44,6 +44,13 @@ Start the standalone browser controller:
 python -u yahtzee_bot.py
 ```
 
+The default `hybrid` mode uses the C++ tablebase with the score-maximizing
+fallback policy. The experimental unified solver can be enabled explicitly:
+
+```powershell
+python -u yahtzee_bot.py --solver-mode unified
+```
+
 ## Architecture
 
 ```mermaid
@@ -52,7 +59,8 @@ graph TD
     B -->|ctypes| C([yahtzee_core.dll])
     C -->|memory map| D[tablebase.bin]
     B --> E([aleatrix_solver/tablebase_target.py])
-    B --> F([YahtzeeAI fallback])
+    B --> F([YahtzeeAI EV evaluator])
+    C -->|ranked WP candidates| B
     G([yahtzee_simulator.py]) --> F
     H([evolve.py]) --> G
 ```
@@ -61,6 +69,7 @@ graph TD
 
 - C++ win-probability tablebase engine for 696,418,304 encoded game states.
 - Python expectiminimax fallback for states where score maximization is safer.
+- Optional unified solver that maximizes EV inside a dynamic tablebase WP window.
 - Local simulator for strategy testing and opponent-score validation.
 - Playwright browser controller with a live overlay and human-paced actions.
 - Game-history routing that keeps incomplete or dirty records out of clean logs.
@@ -117,6 +126,12 @@ Standalone Playwright browser:
 python -u yahtzee_bot.py
 ```
 
+Unified solver with live WP/EV telemetry:
+
+```powershell
+python -u yahtzee_bot.py --solver-mode unified
+```
+
 Attach to an existing Chrome session:
 
 ```powershell
@@ -140,6 +155,16 @@ Run C++ tests after building:
 ```powershell
 .\cpp\build\Release\yahtzee_core_tests.exe
 ```
+
+Run a paired unified-policy evaluation:
+
+```powershell
+python scripts/run_unified_evaluation.py --games 10000 --seed 99 --configs dynamic_v1
+```
+
+The evaluator reuses identical dice seeds across policies and shuffles the
+opponent-score pairing for the selected seed. Generated decision logs and
+simulation result files are intentionally ignored by Git.
 
 ## Advanced: Rebuild the Tablebase
 

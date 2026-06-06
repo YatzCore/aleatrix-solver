@@ -26,6 +26,50 @@ def is_tablebase_ai(ai):
     return bool(getattr(ai, "is_tablebase_ai", False))
 
 
+def get_epsilon_value(policy_name, wp):
+    if policy_name in ("dynamic", "dynamic_v1"):
+        if wp >= 0.80: return 0.001
+        if wp >= 0.50: return 0.0025
+        if wp >= 0.20: return 0.005
+        if wp >= 0.075: return 0.01
+        return 0.03
+    elif policy_name == "dynamic_no_desperation":
+        if wp >= 0.80: return 0.001
+        if wp >= 0.50: return 0.0025
+        if wp >= 0.20: return 0.005
+        if wp >= 0.075: return 0.01
+        return 0.0
+    elif policy_name == "dynamic_no_mid":
+        if wp >= 0.80: return 0.001
+        if wp >= 0.50: return 0.0
+        if wp >= 0.20: return 0.0
+        if wp >= 0.075: return 0.01
+        return 0.03
+    elif policy_name == "dynamic_strict_safe":
+        if wp >= 0.80: return 0.0
+        if wp >= 0.50: return 0.0025
+        if wp >= 0.20: return 0.005
+        if wp >= 0.075: return 0.01
+        return 0.03
+    elif policy_name == "dynamic_conservative":
+        if wp >= 0.80: return 0.0
+        if wp >= 0.50: return 0.001
+        if wp >= 0.20: return 0.0025
+        if wp >= 0.075: return 0.005
+        return 0.01
+    elif policy_name == "dynamic_aggressive":
+        if wp >= 0.80: return 0.0025
+        if wp >= 0.50: return 0.005
+        if wp >= 0.20: return 0.01
+        if wp >= 0.075: return 0.02
+        return 0.05
+    else:
+        try:
+            return float(policy_name)
+        except Exception:
+            return 0.0
+
+
 choose_win_probability_target = choose_tablebase_target_score
 
 
@@ -76,7 +120,13 @@ def play_solo_game(
     opponent_risk_percentile=75,
     score_fallback_ai=None,
     tablebase_fallback_threshold=TABLEBASE_SCORE_FALLBACK_THRESHOLD,
+    epsilon=None,
+    unified_mode=False,
 ):
+    def keep_values_from_mask(current_dice, target_mask):
+        sorted_dice = sorted(int(die) for die in current_dice)
+        return [sorted_dice[i] for i in range(5) if (int(target_mask) >> i) & 1]
+
     rng = rng or random.Random(seed)
     open_categories = list(CATEGORIES)
     upper_score = 0
@@ -94,14 +144,14 @@ def play_solo_game(
 
         while True:
             current_total = upper_score + lower_score + bonus_score
-            
+
             current_opp_score = opponent_score
             if use_opponent_projection and simulated_opponent_final_score is not None:
                 current_opp_score = estimate_simulated_opponent_score(
                     simulated_opponent_final_score,
                     len(open_categories),
                 )
-                
+
             projected = None
             if use_opponent_projection and current_opp_score > 0:
                 projected = project_opponent_score(
@@ -110,7 +160,7 @@ def play_solo_game(
                     projection_model=projection_model,
                     percentile=opponent_risk_percentile,
                 )
-                
+
             risk_level = choose_risk_level(
                 current_total,
                 current_opp_score,
@@ -128,65 +178,289 @@ def play_solo_game(
                     previous_target=current_tablebase_target,
                 )
                 current_tablebase_target = tablebase_target_score
-                move = ai.get_optimal_move(
-                    open_categories=open_categories,
-                    current_dice=dice,
-                    rolls_left=rolls_left,
-                    upper_sum=upper_score,
-                    yahtzee_scored=yahtzee_scored,
-                    target_final_score=tablebase_target_score,
-                    player_total_score=current_total,
-                )
-                action, target, utility, evs = move[:4]
-                tablebase_win_probability = float(utility)
-                score_fallback_used = False
-                full_keep_converted = False
-                fallback_solver = None
-                if action == "keep" and len(target) == 5:
+
+                if unified_mode:
+                    ranked_moves = ai.get_ranked_moves(
+                        open_categories=open_categories,
+                        current_dice=dice,
+                        rolls_left=rolls_left,
+                        upper_sum=upper_score,
+                        yahtzee_scored=yahtzee_scored,
+                        target_final_score=tablebase_target_score,
+                        player_total_score=current_total,
+                    )
+                    best_wp = ranked_moves[0]["wp"]
+                    current_epsilon = get_epsilon_value(epsilon, best_wp)
+
+                    candidates = [
+                        m for m in ranked_moves
+                        if best_wp - m["wp"] <= current_epsilon + 1e-12
+                    ]
+
+                    num_candidates = len(candidates)
+                    ev_calls = 0
+                    wp_changed = False
+
+                    for m in candidates:
+                        ev_val = score_fallback_ai.evaluate_action_ev(
+                            open_categories=open_categories,
+                            current_dice=dice,
+                            rolls_left=rolls_left,
+                            upper_sum=upper_score,
+                            yahtzee_scored=yahtzee_scored,
+                            action_type=m["action_type"],
+                            target_idx=m["target_idx"],
+                            risk_level=0.0
+                        )
+                        m["ev"] = ev_val
+                        ev_calls += 1
+
+                    best_candidate = max(candidates, key=lambda m: m["ev"])
+
+                    best_wp_move = ranked_moves[0]
+                    tablebase_action_ev = best_wp_move.get("ev", -999999.0)
+                    chosen_action_ev = best_candidate["ev"]
+                    ev_gain = chosen_action_ev - tablebase_action_ev
+                    wp_drop = best_wp - best_candidate["wp"]
+
+                    tb_action_kind = "score" if best_wp_move["action_type"] == 0 else "keep"
+                    tb_action_mask = best_wp_move["target_idx"] if best_wp_move["action_type"] == 1 else None
+                    tb_action_cat = CATEGORIES[best_wp_move["target_idx"]] if best_wp_move["action_type"] == 0 else None
+
+                    chosen_action_kind = "score" if best_candidate["action_type"] == 0 else "keep"
+                    chosen_action_mask = best_candidate["target_idx"] if best_candidate["action_type"] == 1 else None
+                    chosen_action_cat = CATEGORIES[best_candidate["target_idx"]] if best_candidate["action_type"] == 0 else None
+
+                    if best_candidate["target_idx"] != ranked_moves[0]["target_idx"] or best_candidate["action_type"] != ranked_moves[0]["action_type"]:
+                        wp_changed = True
+
+                    if best_candidate["action_type"] == 0:
+                        action = "score"
+                        target = CATEGORIES[best_candidate["target_idx"]]
+                    else:
+                        action = "keep"
+                        target_mask = best_candidate["target_idx"]
+                        target = keep_values_from_mask(dice, target_mask)
+
+                    utility = best_candidate["wp"]
+                    tablebase_win_probability = best_wp
+                    score_fallback_used = False
+                    full_keep_converted = False
+                    fallback_solver = "Unified Evaluator"
+
+                    if action == "keep" and len(target) == 5:
+                        rolls_0_moves = ai.get_ranked_moves(
+                            open_categories=open_categories,
+                            current_dice=dice,
+                            rolls_left=0,
+                            upper_sum=upper_score,
+                            yahtzee_scored=yahtzee_scored,
+                            target_final_score=tablebase_target_score,
+                            player_total_score=current_total,
+                        )
+
+                        candidates_0 = [
+                            m for m in rolls_0_moves
+                            if best_wp - m["wp"] <= current_epsilon + 1e-12
+                        ]
+
+                        for m in candidates_0:
+                            ev_val = score_fallback_ai.evaluate_action_ev(
+                                open_categories=open_categories,
+                                current_dice=dice,
+                                rolls_left=0,
+                                upper_sum=upper_score,
+                                yahtzee_scored=yahtzee_scored,
+                                action_type=m["action_type"],
+                                target_idx=m["target_idx"],
+                                risk_level=0.0
+                            )
+                            m["ev"] = ev_val
+                            ev_calls += 1
+
+                        best_candidate_0 = max(candidates_0, key=lambda m: m["ev"])
+
+                        best_wp_move_0 = rolls_0_moves[0]
+                        if "ev" not in best_wp_move_0:
+                            best_wp_move_0["ev"] = score_fallback_ai.evaluate_action_ev(
+                                open_categories=open_categories,
+                                current_dice=dice,
+                                rolls_left=0,
+                                upper_sum=upper_score,
+                                yahtzee_scored=yahtzee_scored,
+                                action_type=best_wp_move_0["action_type"],
+                                target_idx=best_wp_move_0["target_idx"],
+                                risk_level=0.0,
+                            )
+                            ev_calls += 1
+                        tablebase_action_ev = best_wp_move_0["ev"]
+                        chosen_action_ev = best_candidate_0["ev"]
+                        ev_gain = chosen_action_ev - tablebase_action_ev
+                        wp_drop = best_wp - best_candidate_0["wp"]
+
+                        tb_action_kind = "score" if best_wp_move_0["action_type"] == 0 else "keep"
+                        tb_action_mask = best_wp_move_0["target_idx"] if best_wp_move_0["action_type"] == 1 else None
+                        tb_action_cat = CATEGORIES[best_wp_move_0["target_idx"]] if best_wp_move_0["action_type"] == 0 else None
+
+                        chosen_action_kind = "score" if best_candidate_0["action_type"] == 0 else "keep"
+                        chosen_action_mask = best_candidate_0["target_idx"] if best_candidate_0["action_type"] == 1 else None
+                        chosen_action_cat = CATEGORIES[best_candidate_0["target_idx"]] if best_candidate_0["action_type"] == 0 else None
+
+                        wp_changed = wp_changed or (
+                            best_candidate_0["target_idx"] != best_wp_move_0["target_idx"]
+                            or best_candidate_0["action_type"] != best_wp_move_0["action_type"]
+                        )
+
+                        action = "score"
+                        target = CATEGORIES[best_candidate_0["target_idx"]]
+                        utility = best_candidate_0["wp"]
+                        best_candidate = best_candidate_0
+                        num_candidates = len(candidates_0)
+                        full_keep_converted = True
+
+                    evs = {cat: get_score(cat, dice, yahtzee_scored) for cat in open_categories}
+
+                    decision_entry = {
+                        "rolls_left": rolls_left,
+                        "roll_index": 3 - rolls_left,
+                        "decision_type": "keep" if action == "keep" else "score",
+                        "dice": list(dice),
+                        "action": action,
+                        "target": target if isinstance(target, str) else list(target),
+                        "utility": float(utility),
+                        "risk_level": risk_level,
+                        "opponent_score": current_opp_score,
+                        "projected_opponent_score": projected,
+                        "tablebase_target_score": tablebase_target_score,
+                        "tablebase_win_probability": float(best_wp),
+                        "score_fallback_used": False,
+                        "full_keep_converted": full_keep_converted,
+                        "fallback_solver": "Unified Evaluator",
+                        "num_candidates": num_candidates,
+                        "ev_calls": ev_calls,
+                        "wp_changed": wp_changed,
+
+                        "best_wp": float(best_wp),
+                        "chosen_wp": float(best_candidate["wp"]),
+                        "wp_drop": float(wp_drop),
+
+                        "tablebase_action": {
+                            "kind": tb_action_kind,
+                            "mask": tb_action_mask,
+                            "category": tb_action_cat
+                        },
+                        "chosen_action": {
+                            "kind": chosen_action_kind,
+                            "mask": chosen_action_mask,
+                            "category": chosen_action_cat
+                        },
+                        "tablebase_action_ev": float(tablebase_action_ev),
+                        "chosen_action_ev": float(chosen_action_ev),
+                        "ev_gain": float(ev_gain),
+
+                        "candidate_count": num_candidates,
+                        "epsilon": float(current_epsilon),
+                        "policy_name": epsilon,
+                        "turn_index": 14 - len(open_categories),
+                    }
+                else:
                     move = ai.get_optimal_move(
                         open_categories=open_categories,
                         current_dice=dice,
-                        rolls_left=0,
+                        rolls_left=rolls_left,
                         upper_sum=upper_score,
                         yahtzee_scored=yahtzee_scored,
                         target_final_score=tablebase_target_score,
                         player_total_score=current_total,
                     )
                     action, target, utility, evs = move[:4]
-                    full_keep_converted = True
-                if (
-                    score_fallback_ai is not None
-                    and should_use_score_fallback(
-                        tablebase_win_probability,
-                        tablebase_fallback_threshold,
-                        action=action,
-                        target=target,
-                        evs=evs,
-                        target_score=tablebase_target_score,
-                        player_total_score=current_total,
-                        open_category_count=len(open_categories),
-                    )
-                ):
-                    action, target, utility, evs = score_fallback_ai.get_optimal_move(
-                        open_categories=open_categories,
-                        current_dice=dice,
-                        rolls_left=0 if full_keep_converted else rolls_left,
-                        upper_sum=upper_score,
-                        yahtzee_scored=yahtzee_scored,
-                        risk_level=0.0,
-                    )
-                    fallback_solver = getattr(score_fallback_ai, "fallback_solver_name", "Expectiminimax")
+                    tablebase_win_probability = float(utility)
+                    score_fallback_used = False
+                    full_keep_converted = False
+                    fallback_solver = None
+                    num_candidates = None
+                    ev_calls = None
+                    wp_changed = None
+
                     if action == "keep" and len(target) == 5:
-                        action, target, utility, evs = score_fallback_ai.get_optimal_move(
+                        move = ai.get_optimal_move(
                             open_categories=open_categories,
                             current_dice=dice,
                             rolls_left=0,
                             upper_sum=upper_score,
                             yahtzee_scored=yahtzee_scored,
+                            target_final_score=tablebase_target_score,
+                            player_total_score=current_total,
+                        )
+                        action, target, utility, evs = move[:4]
+                        full_keep_converted = True
+                    if (
+                        score_fallback_ai is not None
+                        and should_use_score_fallback(
+                            tablebase_win_probability,
+                            tablebase_fallback_threshold,
+                            action=action,
+                            target=target,
+                            evs=evs,
+                            target_score=tablebase_target_score,
+                            player_total_score=current_total,
+                            open_categories=open_categories,
+                        )
+                    ):
+                        action, target, utility, evs = score_fallback_ai.get_optimal_move(
+                            open_categories=open_categories,
+                            current_dice=dice,
+                            rolls_left=0 if full_keep_converted else rolls_left,
+                            upper_sum=upper_score,
+                            yahtzee_scored=yahtzee_scored,
                             risk_level=0.0,
                         )
-                        full_keep_converted = True
-                    score_fallback_used = True
+                        fallback_solver = getattr(score_fallback_ai, "fallback_solver_name", "Expectiminimax")
+                        if action == "keep" and len(target) == 5:
+                            action, target, utility, evs = score_fallback_ai.get_optimal_move(
+                                open_categories=open_categories,
+                                current_dice=dice,
+                                rolls_left=0,
+                                upper_sum=upper_score,
+                                yahtzee_scored=yahtzee_scored,
+                                risk_level=0.0,
+                            )
+                            full_keep_converted = True
+                        score_fallback_used = True
+
+                    decision_entry = {
+                        "rolls_left": rolls_left,
+                        "roll_index": 3 - rolls_left,
+                        "decision_type": "keep" if action == "keep" else "score",
+                        "dice": list(dice),
+                        "action": action,
+                        "target": target if isinstance(target, str) else list(target),
+                        "utility": float(utility),
+                        "risk_level": risk_level,
+                        "opponent_score": current_opp_score,
+                        "projected_opponent_score": projected,
+                        "tablebase_target_score": tablebase_target_score,
+                        "tablebase_win_probability": tablebase_win_probability,
+                        "score_fallback_used": score_fallback_used,
+                        "full_keep_converted": full_keep_converted,
+                        "fallback_solver": fallback_solver,
+                        "num_candidates": num_candidates,
+                        "ev_calls": ev_calls,
+                        "wp_changed": wp_changed,
+
+                        "best_wp": tablebase_win_probability,
+                        "chosen_wp": float(utility) if utility is not None else None,
+                        "wp_drop": 0.0,
+                        "tablebase_action": None,
+                        "chosen_action": None,
+                        "tablebase_action_ev": None,
+                        "chosen_action_ev": None,
+                        "ev_gain": 0.0,
+                        "candidate_count": None,
+                        "epsilon": None,
+                        "policy_name": None,
+                        "turn_index": 14 - len(open_categories),
+                    }
             else:
                 action, target, utility, evs = ai.get_optimal_move(
                     open_categories=open_categories,
@@ -200,21 +474,45 @@ def play_solo_game(
                 score_fallback_used = False
                 full_keep_converted = False
                 fallback_solver = None
-            decisions.append({
-                "rolls_left": rolls_left,
-                "dice": list(dice),
-                "action": action,
-                "target": target if isinstance(target, str) else list(target),
-                "utility": float(utility),
-                "risk_level": risk_level,
-                "opponent_score": current_opp_score,
-                "projected_opponent_score": projected,
-                "tablebase_target_score": tablebase_target_score,
-                "tablebase_win_probability": tablebase_win_probability,
-                "score_fallback_used": score_fallback_used,
-                "full_keep_converted": full_keep_converted,
-                "fallback_solver": fallback_solver,
-            })
+                num_candidates = None
+                ev_calls = None
+                wp_changed = None
+
+                decision_entry = {
+                    "rolls_left": rolls_left,
+                    "roll_index": 3 - rolls_left,
+                    "decision_type": "keep" if action == "keep" else "score",
+                    "dice": list(dice),
+                    "action": action,
+                    "target": target if isinstance(target, str) else list(target),
+                    "utility": float(utility) if utility is not None else None,
+                    "risk_level": risk_level,
+                    "opponent_score": current_opp_score,
+                    "projected_opponent_score": projected,
+                    "tablebase_target_score": tablebase_target_score,
+                    "tablebase_win_probability": tablebase_win_probability,
+                    "score_fallback_used": score_fallback_used,
+                    "full_keep_converted": full_keep_converted,
+                    "fallback_solver": fallback_solver,
+                    "num_candidates": num_candidates,
+                    "ev_calls": ev_calls,
+                    "wp_changed": wp_changed,
+
+                    "best_wp": tablebase_win_probability,
+                    "chosen_wp": float(utility) if utility is not None else None,
+                    "wp_drop": 0.0,
+                    "tablebase_action": None,
+                    "chosen_action": None,
+                    "tablebase_action_ev": None,
+                    "chosen_action_ev": None,
+                    "ev_gain": 0.0,
+                    "candidate_count": None,
+                    "epsilon": None,
+                    "policy_name": None,
+                    "turn_index": 14 - len(open_categories),
+                }
+
+            decisions.append(decision_entry)
 
             if action == "score" or rolls_left == 0:
                 category = target if action == "score" else open_categories[0]
@@ -333,7 +631,7 @@ def compare_strategies_against_opponents(
     history_path=DEFAULT_HISTORY_PATH,
 ):
     from aleatrix_solver.opponent_history import build_opponent_profile
-    
+
     if validation_mode not in (VALIDATION_MODE_LIVE_LIKE, VALIDATION_MODE_ORACLE_TARGET):
         raise ValueError("validation_mode must be 'live-like' or 'oracle-target'")
     profile = None
@@ -343,7 +641,7 @@ def compare_strategies_against_opponents(
         projection_model = profile["projection_model"]
     if target_score is None and validation_mode == VALIDATION_MODE_LIVE_LIKE:
         target_score = profile["target_score"]
-    
+
     sampled_opponents = repeat_opponent_scores(opponent_scores, games)
     master_rng = random.Random(seed)
     game_seeds = [master_rng.randrange(2**32) for _ in range(games)]
@@ -351,7 +649,7 @@ def compare_strategies_against_opponents(
 
     for name, ai in strategies:
         percentile = getattr(ai, "opponent_risk_percentile", 75)
-        
+
         scores = []
         for game_seed, opp_score in zip(game_seeds, sampled_opponents):
             if validation_mode == VALIDATION_MODE_ORACLE_TARGET:
@@ -374,7 +672,7 @@ def compare_strategies_against_opponents(
                 opponent_risk_percentile=percentile,
             )
             scores.append(res["final_score"])
-            
+
         comparison[name] = summarize_scores(scores, games, seed, target_score=target_score)
         comparison[name]["validation_mode"] = validation_mode
         comparison[name]["opponent_scores"] = sampled_opponents
