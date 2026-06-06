@@ -108,8 +108,8 @@ def main(argv=None):
         run_step(step, project_root=project_root, dry_run=args.dry_run)
 
     print("\nSetup complete.")
-    print("Run the standalone browser controller with:")
-    print("python -u yahtzee_bot.py")
+    print("Run RUN_BOT.bat, or start the controller with:")
+    print(f"{python_exe} -u yahtzee_bot.py")
     return 0
 
 

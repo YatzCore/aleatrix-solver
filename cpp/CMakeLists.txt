@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Optimize for performance in Release builds
 if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     add_compile_options(/O2 /EHsc /W4)
 else()
     add_compile_options(-O3 -Wall -Wextra)
@@ -35,7 +36,6 @@ add_library(yahtzee_core_shared SHARED
     src/dll.cpp
 )
 set_target_properties(yahtzee_core_shared PROPERTIES OUTPUT_NAME "yahtzee_core")
-target_link_libraries(yahtzee_core_shared PRIVATE OpenMP::OpenMP_CXX)
 
 # 3. Core regression tests
 add_executable(yahtzee_core_tests
@@ -45,4 +45,3 @@ add_executable(yahtzee_core_tests
     src/tablebase.cpp
     tests/core_tests.cpp
 )
-target_link_libraries(yahtzee_core_tests PRIVATE OpenMP::OpenMP_CXX)

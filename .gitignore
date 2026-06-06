@@ -34,6 +34,7 @@ docs/superpowers/
 
 # C++ Build & Tablebase Binaries
 cpp/build/
+cpp/.cache/
 cpp/tablebase.bin
 *.bin
 *.dll

@@ -14,35 +14,18 @@ the repo as an advanced local rebuild path.
 Prerequisites:
 
 - Python 3.12+.
-- Git.
-- Visual Studio 2022 Build Tools with the C++ workload, or another CMake/MSVC setup.
+- At least 7 GB of free disk space for the tablebase and dependencies.
 
-Clone and enter the repo:
+1. Download
+   [aleatrix-solver-v1.0.0-windows-x64.zip](https://github.com/YatzCore/aleatrix-solver/releases/download/v1.0.0/aleatrix-solver-v1.0.0-windows-x64.zip)
+   from the [latest GitHub Release](https://github.com/YatzCore/aleatrix-solver/releases/latest).
+2. Extract the ZIP to a normal writable folder.
+3. Double-click `SETUP_WINDOWS.bat`.
+4. After setup finishes, double-click `RUN_BOT.bat`.
 
-```powershell
-git clone https://github.com/YatzCore/aleatrix-solver.git
-cd aleatrix-solver
-```
-
-Run the setup script:
-
-```powershell
-python scripts/setup_windows.py
-```
-
-The script installs Python dependencies, installs Playwright Chromium, builds
-the C++ DLL, downloads the verified tablebase from Hugging Face, and runs the
-Python/C++ tests. If CMake is installed but not on `PATH`, pass it explicitly:
-
-```powershell
-python scripts/setup_windows.py --cmake "C:\Path\To\cmake.exe"
-```
-
-Start the standalone browser controller:
-
-```powershell
-python -u yahtzee_bot.py
-```
+The release already contains the compiled C++ runtime. Git, CMake, and Visual
+Studio are not required. Setup installs the Python dependencies and Playwright
+Chromium, downloads the verified tablebase, and runs the included tests.
 
 The default `unified` mode uses the C++ tablebase to shortlist moves and the
 Python EV evaluator to choose within a bounded win-probability epsilon. The
@@ -69,8 +52,8 @@ graph TD
 ## Features
 
 - C++ win-probability tablebase engine for 696,418,304 encoded game states.
-- Python expectiminimax fallback for states where score maximization is safer.
-- Optional unified solver that maximizes EV inside a dynamic tablebase WP window.
+- Default unified solver that maximizes EV inside a dynamic tablebase WP window.
+- Legacy hybrid solver available as an explicit compatibility mode.
 - Local simulator for strategy testing and opponent-score validation.
 - Playwright browser controller with a live overlay and human-paced actions.
 - Game-history routing that keeps incomplete or dirty records out of clean logs.
@@ -88,36 +71,52 @@ graph TD
 - [tests/](tests/): Python unittest suite.
 - [docs/examples/game_history.sample.jsonl](docs/examples/game_history.sample.jsonl): sanitized example log.
 
-## Manual Setup
+## Tablebase Download
 
-Install Python dependencies:
+The 5.57 GB tablebase is hosted in the public
+[Hugging Face dataset](https://huggingface.co/datasets/YatzCore/aleatrix-solver-tablebase).
+No Hugging Face account or access token is required. `SETUP_WINDOWS.bat`
+downloads these files directly into `cpp/`:
 
-```powershell
-pip install -r requirements.txt
-python -m playwright install chromium
-```
+- `tablebase.bin`
+- `tablebase.meta.json`
+- `tablebase.sha256`
 
-Build the C++ DLL and tests:
+The downloader checks the exact byte size and SHA-256 before reporting success.
+It does not keep a second full copy in the global Hugging Face cache.
 
-```powershell
-cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release
-cmake --build cpp/build --config Release
-```
-
-Download the precomputed tablebase:
+To download it manually:
 
 ```powershell
 python scripts/download_tablebase.py --repo-id YatzCore/aleatrix-solver-tablebase
 ```
 
-This writes:
+## Build from Source
 
-- `cpp/tablebase.bin`
-- `cpp/tablebase.meta.json`
-- `cpp/tablebase.sha256`
+Source builds require Git, CMake, and Visual Studio 2022 Build Tools with the
+Desktop development with C++ workload.
 
-The downloader verifies the expected byte size and SHA-256 checksum before it
-reports success.
+Clone the repo:
+
+```powershell
+git clone https://github.com/YatzCore/aleatrix-solver.git
+cd aleatrix-solver
+```
+
+Run the full source setup:
+
+```powershell
+python scripts/setup_windows.py
+```
+
+This installs Python dependencies and Playwright Chromium, builds the C++
+runtime, downloads the tablebase, and runs the test suites.
+
+If CMake is installed but not on `PATH`, pass it explicitly:
+
+```powershell
+python scripts/setup_windows.py --cmake "C:\Path\To\cmake.exe"
+```
 
 ## Running
 

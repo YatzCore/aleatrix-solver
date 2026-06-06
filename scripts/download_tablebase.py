@@ -1,6 +1,5 @@
 import argparse
 import hashlib
-import shutil
 from pathlib import Path
 
 from huggingface_hub import hf_hub_download
@@ -23,8 +22,15 @@ def read_checksum(path):
     return text.split()[0].lower()
 
 
-def download_file(repo_id, filename, repo_type="dataset"):
-    return Path(hf_hub_download(repo_id=repo_id, filename=filename, repo_type=repo_type))
+def download_file(repo_id, filename, output_dir, repo_type="dataset"):
+    return Path(
+        hf_hub_download(
+            repo_id=repo_id,
+            filename=filename,
+            repo_type=repo_type,
+            local_dir=output_dir,
+        )
+    )
 
 
 def main(argv=None):
@@ -36,17 +42,9 @@ def main(argv=None):
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    bin_cache_path = download_file(args.repo_id, "tablebase.bin")
-    meta_cache_path = download_file(args.repo_id, "tablebase.meta.json")
-    checksum_cache_path = download_file(args.repo_id, "tablebase.sha256")
-
-    tablebase_path = args.output_dir / "tablebase.bin"
-    meta_path = args.output_dir / "tablebase.meta.json"
-    checksum_path = args.output_dir / "tablebase.sha256"
-
-    shutil.copy2(bin_cache_path, tablebase_path)
-    shutil.copy2(meta_cache_path, meta_path)
-    shutil.copy2(checksum_cache_path, checksum_path)
+    tablebase_path = download_file(args.repo_id, "tablebase.bin", args.output_dir)
+    download_file(args.repo_id, "tablebase.meta.json", args.output_dir)
+    checksum_path = download_file(args.repo_id, "tablebase.sha256", args.output_dir)
 
     actual_size = tablebase_path.stat().st_size
     if actual_size != EXPECTED_SIZE:
