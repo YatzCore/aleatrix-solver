@@ -969,8 +969,8 @@ def parse_args():
     parser.add_argument(
         "--solver-mode",
         choices=["hybrid", "unified"],
-        default="hybrid",
-        help="Solver mode for decision making: hybrid (fallback) or unified (dynamic epsilon)."
+        default="unified",
+        help="Solver mode for decision making: unified (default, dynamic epsilon) or hybrid (fallback compatibility)."
     )
     parser.add_argument(
         "--connect",

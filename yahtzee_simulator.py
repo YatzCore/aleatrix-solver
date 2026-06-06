@@ -264,59 +264,60 @@ def play_solo_game(
                             if best_wp - m["wp"] <= current_epsilon + 1e-12
                         ]
 
-                        for m in candidates_0:
-                            ev_val = score_fallback_ai.evaluate_action_ev(
-                                open_categories=open_categories,
-                                current_dice=dice,
-                                rolls_left=0,
-                                upper_sum=upper_score,
-                                yahtzee_scored=yahtzee_scored,
-                                action_type=m["action_type"],
-                                target_idx=m["target_idx"],
-                                risk_level=0.0
+                        if candidates_0:
+                            for m in candidates_0:
+                                ev_val = score_fallback_ai.evaluate_action_ev(
+                                    open_categories=open_categories,
+                                    current_dice=dice,
+                                    rolls_left=0,
+                                    upper_sum=upper_score,
+                                    yahtzee_scored=yahtzee_scored,
+                                    action_type=m["action_type"],
+                                    target_idx=m["target_idx"],
+                                    risk_level=0.0
+                                )
+                                m["ev"] = ev_val
+                                ev_calls += 1
+
+                            best_candidate_0 = max(candidates_0, key=lambda m: m["ev"])
+
+                            best_wp_move_0 = rolls_0_moves[0]
+                            if "ev" not in best_wp_move_0:
+                                best_wp_move_0["ev"] = score_fallback_ai.evaluate_action_ev(
+                                    open_categories=open_categories,
+                                    current_dice=dice,
+                                    rolls_left=0,
+                                    upper_sum=upper_score,
+                                    yahtzee_scored=yahtzee_scored,
+                                    action_type=best_wp_move_0["action_type"],
+                                    target_idx=best_wp_move_0["target_idx"],
+                                    risk_level=0.0,
+                                )
+                                ev_calls += 1
+                            tablebase_action_ev = best_wp_move_0["ev"]
+                            chosen_action_ev = best_candidate_0["ev"]
+                            ev_gain = chosen_action_ev - tablebase_action_ev
+                            wp_drop = best_wp - best_candidate_0["wp"]
+
+                            tb_action_kind = "score" if best_wp_move_0["action_type"] == 0 else "keep"
+                            tb_action_mask = best_wp_move_0["target_idx"] if best_wp_move_0["action_type"] == 1 else None
+                            tb_action_cat = CATEGORIES[best_wp_move_0["target_idx"]] if best_wp_move_0["action_type"] == 0 else None
+
+                            chosen_action_kind = "score" if best_candidate_0["action_type"] == 0 else "keep"
+                            chosen_action_mask = best_candidate_0["target_idx"] if best_candidate_0["action_type"] == 1 else None
+                            chosen_action_cat = CATEGORIES[best_candidate_0["target_idx"]] if best_candidate_0["action_type"] == 0 else None
+
+                            wp_changed = wp_changed or (
+                                best_candidate_0["target_idx"] != best_wp_move_0["target_idx"]
+                                or best_candidate_0["action_type"] != best_wp_move_0["action_type"]
                             )
-                            m["ev"] = ev_val
-                            ev_calls += 1
 
-                        best_candidate_0 = max(candidates_0, key=lambda m: m["ev"])
-
-                        best_wp_move_0 = rolls_0_moves[0]
-                        if "ev" not in best_wp_move_0:
-                            best_wp_move_0["ev"] = score_fallback_ai.evaluate_action_ev(
-                                open_categories=open_categories,
-                                current_dice=dice,
-                                rolls_left=0,
-                                upper_sum=upper_score,
-                                yahtzee_scored=yahtzee_scored,
-                                action_type=best_wp_move_0["action_type"],
-                                target_idx=best_wp_move_0["target_idx"],
-                                risk_level=0.0,
-                            )
-                            ev_calls += 1
-                        tablebase_action_ev = best_wp_move_0["ev"]
-                        chosen_action_ev = best_candidate_0["ev"]
-                        ev_gain = chosen_action_ev - tablebase_action_ev
-                        wp_drop = best_wp - best_candidate_0["wp"]
-
-                        tb_action_kind = "score" if best_wp_move_0["action_type"] == 0 else "keep"
-                        tb_action_mask = best_wp_move_0["target_idx"] if best_wp_move_0["action_type"] == 1 else None
-                        tb_action_cat = CATEGORIES[best_wp_move_0["target_idx"]] if best_wp_move_0["action_type"] == 0 else None
-
-                        chosen_action_kind = "score" if best_candidate_0["action_type"] == 0 else "keep"
-                        chosen_action_mask = best_candidate_0["target_idx"] if best_candidate_0["action_type"] == 1 else None
-                        chosen_action_cat = CATEGORIES[best_candidate_0["target_idx"]] if best_candidate_0["action_type"] == 0 else None
-
-                        wp_changed = wp_changed or (
-                            best_candidate_0["target_idx"] != best_wp_move_0["target_idx"]
-                            or best_candidate_0["action_type"] != best_wp_move_0["action_type"]
-                        )
-
-                        action = "score"
-                        target = CATEGORIES[best_candidate_0["target_idx"]]
-                        utility = best_candidate_0["wp"]
-                        best_candidate = best_candidate_0
-                        num_candidates = len(candidates_0)
-                        full_keep_converted = True
+                            action = "score"
+                            target = CATEGORIES[best_candidate_0["target_idx"]]
+                            utility = best_candidate_0["wp"]
+                            best_candidate = best_candidate_0
+                            num_candidates = len(candidates_0)
+                            full_keep_converted = True
 
                     evs = {cat: get_score(cat, dice, yahtzee_scored) for cat in open_categories}
 

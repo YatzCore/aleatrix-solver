@@ -44,11 +44,12 @@ Start the standalone browser controller:
 python -u yahtzee_bot.py
 ```
 
-The default `hybrid` mode uses the C++ tablebase with the score-maximizing
-fallback policy. The experimental unified solver can be enabled explicitly:
+The default `unified` mode uses the C++ tablebase to shortlist moves and the
+Python EV evaluator to choose within a bounded win-probability epsilon. The
+legacy fallback policy remains available as a compatibility option:
 
 ```powershell
-python -u yahtzee_bot.py --solver-mode unified
+python -u yahtzee_bot.py --solver-mode hybrid
 ```
 
 ## Architecture
@@ -126,10 +127,10 @@ Standalone Playwright browser:
 python -u yahtzee_bot.py
 ```
 
-Unified solver with live WP/EV telemetry:
+Legacy hybrid solver:
 
 ```powershell
-python -u yahtzee_bot.py --solver-mode unified
+python -u yahtzee_bot.py --solver-mode hybrid
 ```
 
 Attach to an existing Chrome session:

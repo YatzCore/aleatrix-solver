@@ -1,5 +1,6 @@
 import unittest
 import os
+from unittest.mock import patch
 from aleatrix_solver.yahtzee_ai import YahtzeeAI, CATEGORIES
 from yahtzee_bot import TablebaseAI, is_tablebase_ready
 from yahtzee_simulator import play_solo_game
@@ -19,6 +20,14 @@ class UnifiedLivePathUnitTests(unittest.TestCase):
 
         def evaluate_action_ev(self, action_type, target_idx, **kwargs):
             return self.values.get((action_type, target_idx), 1.0)
+
+    def test_unified_is_default_solver_mode(self):
+        from yahtzee_bot import parse_args
+
+        with patch("sys.argv", ["yahtzee_bot.py"]):
+            args = parse_args()
+
+        self.assertEqual(args.solver_mode, "unified")
 
     def test_live_unified_move_separates_wp_ev_score_and_latency(self):
         from yahtzee_bot import choose_unified_move
@@ -139,6 +148,48 @@ class UnifiedLivePathUnitTests(unittest.TestCase):
         self.assertEqual(first_decision["target"], "chance")
         self.assertAlmostEqual(first_decision["wp_drop"], 0.005)
         self.assertLessEqual(first_decision["wp_drop"], 0.01)
+
+    def test_simulator_keeps_full_hold_when_no_score_conversion_fits_epsilon(self):
+        class FakeSimulationTablebaseAI:
+            is_tablebase_ai = True
+
+            def __init__(self):
+                self.calls = 0
+
+            def get_ranked_moves(self, open_categories, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return [
+                        {"action_type": 1, "target_idx": 31, "wp": 0.9},
+                        {"action_type": 1, "target_idx": 1, "wp": 0.89},
+                    ]
+                if self.calls == 2:
+                    return [
+                        {"action_type": 0, "target_idx": 12, "wp": 0.88},
+                        {"action_type": 0, "target_idx": 0, "wp": 0.87},
+                    ]
+                category_idx = CATEGORIES.index(open_categories[0])
+                return [{"action_type": 0, "target_idx": category_idx, "wp": 0.5}]
+
+        score_ai = self.FakeScoreAI({
+            (1, 31): 100.0,
+            (1, 1): 1.0,
+        })
+
+        result = play_solo_game(
+            FakeSimulationTablebaseAI(),
+            seed=1,
+            target_score=260,
+            score_fallback_ai=score_ai,
+            epsilon="0.01",
+            unified_mode=True,
+        )
+
+        first_decision = result["turns"][0]["decisions"][0]
+        self.assertEqual(first_decision["action"], "keep")
+        self.assertEqual(len(first_decision["target"]), 5)
+        self.assertFalse(first_decision["full_keep_converted"])
+        self.assertAlmostEqual(first_decision["wp_drop"], 0.0)
 
 
 class UnifiedEvaluatorTests(unittest.TestCase):
