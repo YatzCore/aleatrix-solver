@@ -17,7 +17,7 @@ Prerequisites:
 - At least 7 GB of free disk space for the tablebase and dependencies.
 
 1. Download
-   [aleatrix-solver-v1.0.0-windows-x64.zip](https://github.com/YatzCore/aleatrix-solver/releases/download/v1.0.0/aleatrix-solver-v1.0.0-windows-x64.zip)
+   [aleatrix-solver-v1.1.0-windows-x64.zip](https://github.com/YatzCore/aleatrix-solver/releases/download/v1.1.0/aleatrix-solver-v1.1.0-windows-x64.zip)
    from the [latest GitHub Release](https://github.com/YatzCore/aleatrix-solver/releases/latest).
 2. Extract the ZIP to a normal writable folder.
 3. Double-click `SETUP_WINDOWS.bat`.
