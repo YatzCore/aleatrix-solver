@@ -2,6 +2,8 @@
 #include "yahtzee/dice.hpp"
 #include "yahtzee/scoring.hpp"
 #include "yahtzee/state.hpp"
+#include "yahtzee/keep_engine.hpp"
+#include <utility>
 #include <vector>
 #include <string>
 #include <array>
@@ -46,6 +48,22 @@ struct RankedMove {
     double wp;
 };
 
+constexpr int MAX_RANKED_MOVES = 45; // 13 categories + 32 keep masks
+
+// Ranks the actions of one turn given post_score[c * 13 + cat]: the value of
+// scoring roll c in open category cat. Score moves come first on ties (stable
+// sort). Keep-all-five is included only when include_keep_all is true; it is
+// never strictly better than the best alternative. Returns the move count.
+int rank_turn_actions(
+    const KeepEngine& keep_engine,
+    const double* post_score,
+    const std::vector<int>& open_categories,
+    int current_c,
+    int rolls_left,
+    bool include_keep_all,
+    RankedMove* out_moves
+);
+
 class Tablebase {
 public:
     Tablebase(
@@ -67,6 +85,8 @@ public:
         data_ = external_data;
     }
 
+    const KeepEngine& keep_engine() const { return keep_engine_; }
+
     // Evaluates the optimal move from a given state and dice roll.
     // Returns 0 for 'score', 1 for 'keep'.
     int get_optimal_move(
@@ -84,7 +104,21 @@ public:
         const GameState& state,
         const Dice& current_dice,
         int rolls_left,
-        RankedMove* out_moves // preallocated array of size >= 45
+        RankedMove* out_moves // preallocated array of size >= MAX_RANKED_MOVES
+    ) const;
+
+    // Ranks all legal moves by win probability averaged over an uncertain
+    // score_to_beat. weights[d] (d = 0..400) is the probability that the
+    // remaining points needed are d; weights need not be normalized. The
+    // average is taken before every in-turn max, which is the correct
+    // in-turn policy because the opponent's final score is not revealed
+    // during our turn. Keep-all-five is omitted. state.score_to_beat is ignored.
+    int get_ranked_moves_weighted(
+        const GameState& state,
+        const double* weights,
+        const Dice& current_dice,
+        int rolls_left,
+        RankedMove* out_moves
     ) const;
 
     // Save/Load to/from disk
@@ -103,17 +137,18 @@ private:
     void compute_layer_0();
     void compute_layer(int k);
 
-    // Precomputes SCORE_TABLE and other helpers
-    void precompute_scoring();
-
-    // Prunes duplicate keeping masks for each of the 252 combinations
-    void precompute_unique_masks();
-
-    // Precomputes sparse transitions for fast expected value calculation
-    void precompute_sparse_transitions();
+    // post_score[c * 13 + cat] averaged over (d, weight) pairs.
+    void fill_post_score(
+        const GameState& state,
+        const std::vector<std::pair<int, double>>& weights,
+        const std::vector<int>& open_categories,
+        double* post_score
+    ) const;
 
     const DiceData& dice_data_;
     const TransitionMatrix& transition_matrix_;
+    KeepEngine keep_engine_;
+    ScoreTable score_table_;
 
     // Pointer to double data (either data_vector_.data() or memory-mapped pointer)
     const double* data_ = nullptr;
@@ -121,24 +156,6 @@ private:
 
     // Helper lists: groups all 8192 category masks by the number of set bits (0 to 13)
     std::vector<std::vector<uint16_t>> masks_by_popcount_;
-
-    // Precomputed scoring table:
-    // score_table_[yahtzee_scored (0 or 1)][category (0 to 12)][dice_index (0 to 251)]
-    std::array<std::array<std::array<int, 252>, 13>, 2> score_table_;
-
-    // Precomputed yahtzee indicator:
-    // is_yahtzee_[dice_index (0 to 251)] -> true/false
-    std::array<bool, 252> is_yahtzee_;
-
-    // Precomputed list of unique keeping masks for each of the 252 combinations
-    std::vector<std::vector<int>> unique_masks_by_dice_;
-
-    // Struct for fast sparse transition iteration
-    struct SparseTransition {
-        uint8_t next_c;
-        double prob;
-    };
-    std::vector<std::vector<SparseTransition>> sparse_transitions_;
 };
 
 } // namespace yahtzee

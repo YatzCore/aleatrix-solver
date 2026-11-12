@@ -23,9 +23,12 @@ from aleatrix_solver.strategy_config import (
     create_tablebase_fallback_ai,
     load_strategy_config,
 )
+from aleatrix_solver.mixture_solver import choose_mixture_move
+from aleatrix_solver.opponent_model import OpponentBoard, OpponentModel
 from aleatrix_solver.tablebase_target import (
     TABLEBASE_SCORE_FALLBACK_THRESHOLD,
     choose_tablebase_target_score,
+    compute_tablebase_score_to_beat,
     get_stabilized_tablebase_target,
     should_use_score_fallback,
 )
@@ -485,17 +488,33 @@ def is_tablebase_ready(
     )
 
 
-def compute_tablebase_score_to_beat(target_final_score, player_total_score, upper_sum):
-    clean_upper_sum = max(0, min(105, int(upper_sum)))
-    upper_bonus = 35 if clean_upper_sum >= 63 else 0
-    already_bankable_lower_score = int(player_total_score) - clean_upper_sum - upper_bonus
-    score_to_beat = int(math.ceil(float(target_final_score))) + 1 - already_bankable_lower_score
-    return max(0, min(400, score_to_beat))
-
-
 def keep_values_from_mask(current_dice, target_mask):
     sorted_dice = sorted(int(die) for die in current_dice)
     return [sorted_dice[i] for i in range(5) if (int(target_mask) >> i) & 1]
+
+def default_library_path(project_root=None):
+    """Path of the compiled solver library for this platform."""
+    root = project_root or os.path.dirname(os.path.abspath(__file__))
+    if sys.platform == "win32":
+        return os.path.abspath(os.path.join(root, "cpp", "build", "Release", "yahtzee_core.dll"))
+    name = "libyahtzee_core.dylib" if sys.platform == "darwin" else "libyahtzee_core.so"
+    candidates = [
+        os.path.join(root, "cpp", "build", "Release", name),
+        os.path.join(root, "cpp", "build", name),
+    ]
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return os.path.abspath(candidate)
+    return os.path.abspath(candidates[-1])
+
+
+def category_mask(open_categories):
+    index = {cat: i for i, cat in enumerate(CATEGORIES)}
+    mask = 0
+    for cat in open_categories:
+        mask |= 1 << index[cat]
+    return mask
+
 
 class RankedMove(ctypes.Structure):
     _fields_ = [
@@ -507,10 +526,30 @@ class RankedMove(ctypes.Structure):
 class TablebaseAI:
     is_tablebase_ai = True
 
-    def __init__(self, dll_path, bin_path):
+    def __init__(self, dll_path, bin_path, ev_cache_path=None):
         self.lib = ctypes.CDLL(dll_path)
+        self._bind_functions()
 
-        # Set up Win32 function argument and return types
+        # Initialize the solver context (will memory map the tablebase file).
+        # bin_path=None creates an expected-score-only context (no tablebase).
+        if bin_path is None:
+            if not self.supports_exact_ev:
+                raise RuntimeError("Solver library does not provide the exact expected-score table")
+            self.ctx = self.lib.init_ev_solver()
+        else:
+            self.ctx = self.lib.init_solver(bin_path.encode('utf-8'))
+        if not self.ctx:
+            raise RuntimeError(f"Failed to initialize C++ solver context with bin at {bin_path}")
+        if ev_cache_path and self.supports_exact_ev:
+            self.prepare_ev_table(ev_cache_path)
+
+    @classmethod
+    def ev_only(cls, dll_path, ev_cache_path=None):
+        """Exact expected-score solver without the 5.6 GB tablebase."""
+        return cls(dll_path, None, ev_cache_path=ev_cache_path)
+
+    def _bind_functions(self):
+        # Set up function argument and return types
         self.lib.init_solver.argtypes = [ctypes.c_char_p]
         self.lib.init_solver.restype = ctypes.c_void_p
 
@@ -552,10 +591,45 @@ class TablebaseAI:
         ]
         self.lib.get_state_value_dll.restype = ctypes.c_double
 
-        # Initialize the solver context (will memory map the tablebase file)
-        self.ctx = self.lib.init_solver(bin_path.encode('utf-8'))
-        if not self.ctx:
-            raise RuntimeError(f"Failed to initialize C++ solver context with bin at {bin_path}")
+        # Mixture/exact-EV entry points; absent from libraries built before them.
+        try:
+            self.lib.init_ev_solver.argtypes = []
+            self.lib.init_ev_solver.restype = ctypes.c_void_p
+            self.lib.prepare_ev_table.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+            self.lib.prepare_ev_table.restype = ctypes.c_int
+            self.lib.get_ranked_moves_weighted_dll.argtypes = [
+                ctypes.c_void_p,                      # ctx
+                ctypes.c_uint16,                      # mask
+                ctypes.c_uint8,                       # upper_sum
+                ctypes.c_uint8,                       # yahtzee_scored
+                ctypes.POINTER(ctypes.c_double),      # weights[401] over score_to_beat
+                ctypes.c_uint8,                       # rolls_left
+                ctypes.POINTER(ctypes.c_int),         # current_dice
+                ctypes.POINTER(RankedMove),           # out_moves
+            ]
+            self.lib.get_ranked_moves_weighted_dll.restype = ctypes.c_int
+            self.lib.get_ranked_moves_ev_dll.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_uint16,
+                ctypes.c_uint8,
+                ctypes.c_uint8,
+                ctypes.c_uint8,
+                ctypes.POINTER(ctypes.c_int),
+                ctypes.POINTER(RankedMove),
+            ]
+            self.lib.get_ranked_moves_ev_dll.restype = ctypes.c_int
+            self.lib.get_state_moments_dll.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_uint16,
+                ctypes.c_uint8,
+                ctypes.c_uint8,
+                ctypes.POINTER(ctypes.c_double),
+                ctypes.POINTER(ctypes.c_double),
+            ]
+            self.lib.get_state_moments_dll.restype = ctypes.c_int
+            self.supports_exact_ev = True
+        except AttributeError:
+            self.supports_exact_ev = False
 
     def __del__(self):
         if hasattr(self, 'ctx') and self.ctx and hasattr(self, 'lib') and hasattr(self.lib, 'free_solver'):
@@ -694,8 +768,82 @@ class TablebaseAI:
             })
         return result
 
+    def prepare_ev_table(self, cache_path=None):
+        """Builds (or loads from cache_path) the exact expected-score table now."""
+        path = cache_path.encode("utf-8") if cache_path else None
+        if self.lib.prepare_ev_table(self.ctx, path) != 0:
+            raise RuntimeError("Failed to prepare the expected-score table")
 
+    def _ranked_moves_from_buffer(self, out_moves, count):
+        if count < 0:
+            raise RuntimeError("Solver library rejected the query")
+        return [
+            {
+                "action_type": int(out_moves[i].action_type),
+                "target_idx": int(out_moves[i].target_idx),
+                "wp": float(out_moves[i].wp),
+            }
+            for i in range(count)
+        ]
 
+    def get_ranked_moves_weighted(
+        self,
+        open_categories,
+        current_dice,
+        rolls_left,
+        upper_sum,
+        yahtzee_scored,
+        weights,
+    ):
+        """Moves ranked by win probability averaged over weights[d], d = 0..400."""
+        if len(weights) != 401:
+            raise ValueError("weights must have 401 entries (score_to_beat 0..400)")
+        c_weights = (ctypes.c_double * 401)(*weights)
+        c_dice = (ctypes.c_int * 5)(*current_dice)
+        out_moves = (RankedMove * 45)()
+        count = self.lib.get_ranked_moves_weighted_dll(
+            self.ctx,
+            category_mask(open_categories),
+            max(0, min(105, int(upper_sum))),
+            1 if yahtzee_scored else 0,
+            c_weights,
+            int(rolls_left),
+            c_dice,
+            out_moves,
+        )
+        return self._ranked_moves_from_buffer(out_moves, count)
+
+    def get_ranked_moves_ev(self, open_categories, current_dice, rolls_left, upper_sum, yahtzee_scored):
+        """Moves ranked by exact expected remaining points (stored under "wp")."""
+        c_dice = (ctypes.c_int * 5)(*current_dice)
+        out_moves = (RankedMove * 45)()
+        count = self.lib.get_ranked_moves_ev_dll(
+            self.ctx,
+            category_mask(open_categories),
+            max(0, min(105, int(upper_sum))),
+            1 if yahtzee_scored else 0,
+            int(rolls_left),
+            c_dice,
+            out_moves,
+        )
+        return self._ranked_moves_from_buffer(out_moves, count)
+
+    def get_remaining_score_moments(self, open_categories, upper_sum, yahtzee_scored):
+        """(mean, std) of points still to come for an expected-score-maximizing player."""
+        mean = ctypes.c_double(0.0)
+        second = ctypes.c_double(0.0)
+        status = self.lib.get_state_moments_dll(
+            self.ctx,
+            category_mask(open_categories),
+            max(0, min(105, int(upper_sum))),
+            1 if yahtzee_scored else 0,
+            ctypes.byref(mean),
+            ctypes.byref(second),
+        )
+        if status != 0:
+            raise RuntimeError("Solver library rejected the moments query")
+        variance = max(0.0, second.value - mean.value ** 2)
+        return mean.value, math.sqrt(variance)
 
 
 def choose_tablebase_move_with_score_fallback(
@@ -988,9 +1136,13 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Solitaired Yahtzee AI Bot (Multiplayer-Ready & Robust)")
     parser.add_argument(
         "--solver-mode",
-        choices=["hybrid", "unified"],
+        choices=["hybrid", "unified", "mixture"],
         default="unified",
-        help="Solver mode for decision making: unified (default, dynamic epsilon) or hybrid (fallback compatibility)."
+        help=(
+            "Solver mode for decision making: unified (default, dynamic epsilon), "
+            "mixture (win probability averaged over the opponent's final-score distribution), "
+            "or hybrid (fallback compatibility)."
+        )
     )
     parser.add_argument(
         "--connect",
@@ -1881,6 +2033,21 @@ def play_game(page, ai, autoplay_start_time=None, score_fallback_ai=None, game_l
     strategy_config = load_strategy_config(STRATEGY_CONFIG_PATH)
     opponent_risk_percentile = strategy_config.get("opponent_risk_percentile", 75)
 
+    opponent_model = None
+    if solver_mode == "mixture":
+        if isinstance(ai, TablebaseAI) and getattr(ai, "supports_exact_ev", False):
+            opponent_model = OpponentModel.from_history(
+                ai.get_remaining_score_moments,
+                opponent_profile.get("opponent_scores", []),
+            )
+            print(
+                f"Mixture solver: opponent model mean x{opponent_model.mean_ratio:.3f}, "
+                f"std x{opponent_model.std_ratio:.3f} of expected-score-optimal play."
+            )
+        else:
+            print("Mixture solver needs a tablebase library with exact-EV support; using unified mode.")
+            solver_mode = "unified"
+
     games_completed = 0
     if autoplay_start_time is not None:
         games_completed = count_completed_games_since(GAME_HISTORY_PATH, autoplay_start_time)
@@ -2165,9 +2332,37 @@ def play_game(page, ai, autoplay_start_time=None, score_fallback_ai=None, game_l
             previous_target=current_tablebase_target,
         )
 
+        opponent_expected_final_score = None
         if isinstance(ai, TablebaseAI):
             current_tablebase_target = tablebase_target_score
-            if solver_mode == "unified":
+            if solver_mode == "mixture":
+                opponent_boards = [
+                    OpponentBoard(
+                        score=get_player_score_from_snapshot(state_snapshot, opp_id),
+                        open_categories=get_open_categories_from_snapshot(state_snapshot, opp_id),
+                        upper_sum=get_upper_sum_from_snapshot(state_snapshot, opp_id),
+                        yahtzee_scored=is_yahtzee_scored_from_snapshot(state_snapshot, opp_id),
+                    )
+                    for opp_id in (opponent_ids or get_opponent_ids_from_snapshot(state_snapshot, player_id))
+                ]
+                move = choose_mixture_move(
+                    tablebase_ai=ai,
+                    open_categories=open_cats,
+                    current_dice=current_dice,
+                    rolls_left=rolls_left,
+                    upper_sum=upper_sum,
+                    yahtzee_scored=y_scored,
+                    player_total_score=user_sc,
+                    opponent_final_distribution=opponent_model.best_opponent_distribution(opponent_boards),
+                )
+                opponent_expected_final_score = move["opponent_expected_final_score"]
+                tablebase_target_score = None
+                print(
+                    f"[Mixture Solver] Opponent expected final: {opponent_expected_final_score:.1f} | "
+                    f"WP: {move['utility']:.2%} | Action: {move['action']} | Target: {move['target']}",
+                    flush=True,
+                )
+            elif solver_mode == "unified":
                 move = choose_unified_move(
                     tablebase_ai=ai,
                     score_fallback_ai=score_fallback_ai,
@@ -2202,7 +2397,7 @@ def play_game(page, ai, autoplay_start_time=None, score_fallback_ai=None, game_l
             wp_changed = move.get("wp_changed", False)
             full_keep_converted = move["full_keep_converted"]
             fallback_solver = move.get("fallback_solver")
-            if solver_mode == "unified":
+            if solver_mode in ("unified", "mixture"):
                 update_ui_win_probability(page, utility)
             else:
                 update_ui_win_probability(page, tablebase_win_probability if not score_fallback_used else None)
@@ -2238,6 +2433,7 @@ def play_game(page, ai, autoplay_start_time=None, score_fallback_ai=None, game_l
             "full_keep_converted": full_keep_converted,
             "fallback_solver": fallback_solver,
             "projected_opponent_score": projected_opp_score,
+            "opponent_expected_final_score": opponent_expected_final_score,
             "action": action,
             "target": target if isinstance(target, str) else list(target),
             "expected_utility": float(utility)
@@ -2423,8 +2619,9 @@ def main():
     strategy_config = load_strategy_config(STRATEGY_CONFIG_PATH)
     print(f"Loaded strategy config: {strategy_config}")
 
-    dll_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "cpp", "build", "Release", "yahtzee_core.dll"))
+    dll_path = default_library_path()
     bin_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "cpp", "tablebase.bin"))
+    ev_cache_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "cpp", "ev_table.bin"))
     score_fallback_ai = None
 
     if is_tablebase_ready(dll_path, bin_path):
@@ -2434,6 +2631,9 @@ def main():
         print(f"  - Metadata: {tablebase_metadata_path(bin_path)}")
         try:
             ai = TablebaseAI(dll_path, bin_path)
+            if args.solver_mode == "mixture" and ai.supports_exact_ev:
+                print("Preparing exact expected-score table (first run builds and caches it)...")
+                ai.prepare_ev_table(ev_cache_path)
             global IS_TABLEBASE
             IS_TABLEBASE = True
             print("C++ Memory-mapped Tablebase solver loaded successfully!")

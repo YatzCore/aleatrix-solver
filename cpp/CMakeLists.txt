@@ -14,6 +14,7 @@ endif()
 
 # Find and configure OpenMP for multi-threading
 find_package(OpenMP REQUIRED)
+find_package(Threads REQUIRED)
 
 include_directories(include)
 
@@ -23,9 +24,11 @@ add_executable(yahtzee_core
     src/scoring.cpp
     src/state.cpp
     src/tablebase.cpp
+    src/keep_engine.cpp
+    src/ev_table.cpp
     src/main.cpp
 )
-target_link_libraries(yahtzee_core PRIVATE OpenMP::OpenMP_CXX)
+target_link_libraries(yahtzee_core PRIVATE OpenMP::OpenMP_CXX Threads::Threads)
 
 # 2. Shared Library target (for Python ctypes integration)
 add_library(yahtzee_core_shared SHARED
@@ -33,9 +36,14 @@ add_library(yahtzee_core_shared SHARED
     src/scoring.cpp
     src/state.cpp
     src/tablebase.cpp
+    src/keep_engine.cpp
+    src/ev_table.cpp
     src/dll.cpp
 )
 set_target_properties(yahtzee_core_shared PROPERTIES OUTPUT_NAME "yahtzee_core")
+target_link_libraries(yahtzee_core_shared PRIVATE Threads::Threads)
+# The shared library is intentionally built without OpenMP so the shipped DLL
+# does not depend on the OpenMP runtime (vcomp140.dll on Windows).
 
 # 3. Core regression tests
 add_executable(yahtzee_core_tests
@@ -43,5 +51,8 @@ add_executable(yahtzee_core_tests
     src/scoring.cpp
     src/state.cpp
     src/tablebase.cpp
+    src/keep_engine.cpp
+    src/ev_table.cpp
     tests/core_tests.cpp
 )
+target_link_libraries(yahtzee_core_tests PRIVATE Threads::Threads)

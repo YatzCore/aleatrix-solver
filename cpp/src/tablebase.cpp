@@ -1,7 +1,5 @@
 #include "yahtzee/tablebase.hpp"
 #include <algorithm>
-#include <set>
-#include <numeric>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
@@ -157,12 +155,85 @@ bool validate_tablebase_file(
     return true;
 }
 
+namespace {
+
+constexpr int NUM_D = static_cast<int>(NUM_SCORE_TO_BEAT_VALUES);
+
+inline uint64_t row_base(uint16_t mask, int upper_sum, int yahtzee_scored) {
+    return encode_state(GameState{
+        mask,
+        static_cast<uint8_t>(upper_sum),
+        static_cast<uint8_t>(yahtzee_scored),
+        0
+    });
+}
+
+std::vector<int> open_categories_of(uint16_t mask) {
+    std::vector<int> open;
+    open.reserve(13);
+    for (int cat = 0; cat < 13; ++cat) {
+        if ((mask >> cat) & 1) open.push_back(cat);
+    }
+    return open;
+}
+
+} // namespace
+
+int rank_turn_actions(
+    const KeepEngine& keep_engine,
+    const double* post_score,
+    const std::vector<int>& open_categories,
+    int current_c,
+    int rolls_left,
+    bool include_keep_all,
+    RankedMove* out_moves
+) {
+    if (current_c < 0 || open_categories.empty()) return 0;
+
+    std::vector<RankedMove> moves;
+    moves.reserve(MAX_RANKED_MOVES);
+    for (int cat : open_categories) {
+        moves.push_back({0, cat, post_score[current_c * 13 + cat]});
+    }
+
+    if (rolls_left > 0) {
+        std::vector<double> values(252);
+        for (int c = 0; c < 252; ++c) {
+            double best = post_score[c * 13 + open_categories[0]];
+            for (int cat : open_categories) best = std::max(best, post_score[c * 13 + cat]);
+            values[c] = best;
+        }
+
+        std::vector<double> keeps(KeepEngine::NUM_KEEPS);
+        if (rolls_left >= 2) {
+            keep_engine.expect(values.data(), 1, keeps.data());
+            keep_engine.max_over_keeps(keeps.data(), 1, values.data());
+        }
+        keep_engine.expect(values.data(), 1, keeps.data());
+
+        const auto& ids = keep_engine.keeps_of(current_c);
+        const auto& masks = keep_engine.masks_of(current_c);
+        for (size_t i = 0; i < ids.size(); ++i) {
+            if (!include_keep_all && keep_engine.keep_size(ids[i]) == 5) continue;
+            moves.push_back({1, masks[i], keeps[ids[i]]});
+        }
+    }
+
+    std::stable_sort(moves.begin(), moves.end(), [](const RankedMove& a, const RankedMove& b) {
+        return a.wp > b.wp;
+    });
+
+    const int count = static_cast<int>(moves.size());
+    std::copy(moves.begin(), moves.end(), out_moves);
+    return count;
+}
+
 Tablebase::Tablebase(
     const DiceData& dice_data,
     const TransitionMatrix& transition_matrix,
     TablebaseStorage storage
 )
-    : dice_data_(dice_data), transition_matrix_(transition_matrix) {
+    : dice_data_(dice_data), transition_matrix_(transition_matrix), keep_engine_(dice_data), score_table_(dice_data.get_combinations()) {
 
     if (storage == TablebaseStorage::Allocate) {
         std::cout << "[INFO] Allocating Tablebase memory (5.19 GiB)..." << std::endl;
@@ -180,75 +251,15 @@ Tablebase::Tablebase(
         }
         masks_by_popcount_[pop].push_back(static_cast<uint16_t>(m));
     }
-
-    precompute_scoring();
-    precompute_unique_masks();
-    precompute_sparse_transitions();
-}
-
-void Tablebase::precompute_scoring() {
-    const auto& combinations = dice_data_.get_combinations();
-    for (int y = 0; y < 2; ++y) {
-        for (int cat = 0; cat < 13; ++cat) {
-            for (int c = 0; c < 252; ++c) {
-                score_table_[y][cat][c] = score_category(cat, combinations[c], y == 1);
-            }
-        }
-    }
-
-    for (int c = 0; c < 252; ++c) {
-        const Dice& D = combinations[c];
-        is_yahtzee_[c] = is_yahtzee_roll(D);
-    }
-}
-
-void Tablebase::precompute_unique_masks() {
-    unique_masks_by_dice_.resize(252);
-    const auto& combinations = dice_data_.get_combinations();
-
-    for (int c = 0; c < 252; ++c) {
-        const Dice& D = combinations[c];
-        std::set<int> unique_keeps_encoded;
-        auto& unique_masks = unique_masks_by_dice_[c];
-
-        for (int m = 0; m < 32; ++m) {
-            int encoded = 0;
-            for (int i = 0; i < 5; ++i) {
-                if ((m >> i) & 1) {
-                    encoded = encoded * 10 + D[i];
-                }
-            }
-            if (unique_keeps_encoded.insert(encoded).second) {
-                unique_masks.push_back(m);
-            }
-        }
-    }
-}
-
-void Tablebase::precompute_sparse_transitions() {
-    sparse_transitions_.resize(252 * 32);
-    for (int c = 0; c < 252; ++c) {
-        for (int m = 0; m < 32; ++m) {
-            auto& list = sparse_transitions_[c * 32 + m];
-            for (int next_c = 0; next_c < 252; ++next_c) {
-                double p = transition_matrix_.get_transition(c, m, next_c);
-                if (p > 1e-9) {
-                    list.push_back({static_cast<uint8_t>(next_c), p});
-                }
-            }
-        }
-    }
 }
 
 void Tablebase::compute_layer_0() {
     uint16_t mask = 0;
-    // We write to the vector since computation is done during solve phase
     for (uint32_t u = 0; u < NUM_UPPER_SUMS; ++u) {
         for (uint32_t y = 0; y < NUM_YAHTZEE_SCORED; ++y) {
             for (uint32_t d = 0; d < NUM_SCORE_TO_BEAT_VALUES; ++d) {
                 GameState state{mask, static_cast<uint8_t>(u), static_cast<uint8_t>(y), static_cast<uint16_t>(d)};
-                uint64_t idx = encode_state(state);
-                data_vector_[idx] = terminal_win_probability(static_cast<int>(u), static_cast<int>(d));
+                data_vector_[encode_state(state)] = terminal_win_probability(static_cast<int>(u), static_cast<int>(d));
             }
         }
     }
@@ -256,112 +267,60 @@ void Tablebase::compute_layer_0() {
 
 void Tablebase::compute_layer(int k) {
     const auto& layer_masks = masks_by_popcount_[k];
-    int num_masks = static_cast<int>(layer_masks.size());
+    const int num_masks = static_cast<int>(layer_masks.size());
+    const int num_upper = static_cast<int>(NUM_UPPER_SUMS);
+    double* data = data_vector_.data();
 
 #pragma omp parallel
     {
-        // Thread-local temporary workspace arrays to avoid heap allocations
-        std::vector<std::vector<double>> V_score(252, std::vector<double>(401, 0.0));
-        std::vector<std::vector<double>> V_2(252, std::vector<double>(401, 0.0));
-        std::vector<std::vector<double>> V_1(252, std::vector<double>(401, 0.0));
+        // Thread-local workspaces: 252 or 462 rows of 401 score_to_beat values.
+        std::vector<double> scored(252 * NUM_D);
+        std::vector<double> keeps(static_cast<size_t>(KeepEngine::NUM_KEEPS) * NUM_D);
+        std::vector<double> after_second(252 * NUM_D);
 
-        int total_iterations = num_masks * 106;
+        const int total_iterations = num_masks * num_upper;
 #pragma omp for schedule(dynamic)
         for (int loop_idx = 0; loop_idx < total_iterations; ++loop_idx) {
-            int m_idx = loop_idx / 106;
-            int u = loop_idx % 106;
-            uint16_t mask = layer_masks[m_idx];
-
-            // Gather open categories
-            std::vector<int> open_cats;
-            open_cats.reserve(13);
-            for (int cat = 0; cat < 13; ++cat) {
-                if ((mask >> cat) & 1) {
-                    open_cats.push_back(cat);
-                }
-            }
+            const uint16_t mask = layer_masks[loop_idx / num_upper];
+            const int u = loop_idx % num_upper;
+            const std::vector<int> open = open_categories_of(mask);
 
             for (int y = 0; y < 2; ++y) {
-                // 1. Compute V_score[c][d]
+                // 1. Value of scoring each final roll in its best open category.
+                std::fill(scored.begin(), scored.end(), 0.0);
                 for (int c = 0; c < 252; ++c) {
-                    bool is_y_roll = is_yahtzee_[c];
-                    for (int d = 0; d < 401; ++d) {
-                        double best_val = 0.0;
-                        for (int cat : open_cats) {
-                            (void)is_y_roll;
-                            const Dice& dice = dice_data_.get_combinations()[c];
-                            ScoreTransition transition = apply_score_transition(cat, dice, u, y == 1, d);
-
-                            uint16_t next_mask = mask ^ (1 << cat);
-                            uint64_t next_idx = (((static_cast<uint64_t>(next_mask) * 106 + transition.next_upper_sum) * 2 + transition.next_yahtzee_scored) * 401 + transition.next_score_to_beat);
-                            double val = data_vector_[next_idx]; // Read from vector during computations
-                            if (val > best_val) {
-                                best_val = val;
-                            }
+                    double* out = &scored[c * NUM_D];
+                    for (int cat : open) {
+                        // Only the reduction depends on d, so evaluate the transition once.
+                        ScoreTransition t = score_table_.transition(cat, c, u, y == 1, 0);
+                        const uint16_t next_mask = static_cast<uint16_t>(mask ^ (1u << cat));
+                        const double* row = data + row_base(next_mask, t.next_upper_sum, t.next_yahtzee_scored);
+                        const int r = std::min(t.score_to_beat_reduction, NUM_D);
+                        const double at_zero = row[0];
+                        for (int d = 0; d < r; ++d) {
+                            out[d] = std::max(out[d], at_zero);
                         }
-                        V_score[c][d] = best_val;
+                        for (int d = r; d < NUM_D; ++d) {
+                            out[d] = std::max(out[d], row[d - r]);
+                        }
                     }
                 }
 
-                // 2. Compute V_2[c][d]
+                // 2. One reroll left, then 3. two rerolls left.
+                keep_engine_.expect(scored.data(), NUM_D, keeps.data());
+                keep_engine_.max_over_keeps(keeps.data(), NUM_D, after_second.data());
+                keep_engine_.expect(after_second.data(), NUM_D, keeps.data());
+                keep_engine_.max_over_keeps(keeps.data(), NUM_D, scored.data());
+
+                // 4. Average over the opening roll.
+                double* dst = data + row_base(mask, u, y);
+                for (int d = 0; d < NUM_D; ++d) dst[d] = 0.0;
                 for (int c = 0; c < 252; ++c) {
-                    const auto& unique_masks = unique_masks_by_dice_[c];
-                    for (int d = 0; d < 401; ++d) {
-                        V_2[c][d] = 0.0;
-                    }
-
-                    for (int m : unique_masks) {
-                        double temp_sum[401] = {0.0};
-                        const auto& trans_list = sparse_transitions_[c * 32 + m];
-                        for (const auto& entry : trans_list) {
-                            double p = entry.prob;
-                            const double* src = &V_score[entry.next_c][0];
-                            for (int d = 0; d < 401; ++d) {
-                                temp_sum[d] += p * src[d];
-                            }
-                        }
-                        for (int d = 0; d < 401; ++d) {
-                            if (temp_sum[d] > V_2[c][d]) {
-                                V_2[c][d] = temp_sum[d];
-                            }
-                        }
-                    }
+                    const double p = dice_data_.get_probability(c);
+                    const double* src = &scored[c * NUM_D];
+                    for (int d = 0; d < NUM_D; ++d) dst[d] += p * src[d];
                 }
-
-                // 3. Compute V_1[c][d]
-                for (int c = 0; c < 252; ++c) {
-                    const auto& unique_masks = unique_masks_by_dice_[c];
-                    for (int d = 0; d < 401; ++d) {
-                        V_1[c][d] = 0.0;
-                    }
-
-                    for (int m : unique_masks) {
-                        double temp_sum[401] = {0.0};
-                        const auto& trans_list = sparse_transitions_[c * 32 + m];
-                        for (const auto& entry : trans_list) {
-                            double p = entry.prob;
-                            const double* src = &V_2[entry.next_c][0];
-                            for (int d = 0; d < 401; ++d) {
-                                temp_sum[d] += p * src[d];
-                            }
-                        }
-                        for (int d = 0; d < 401; ++d) {
-                            if (temp_sum[d] > V_1[c][d]) {
-                                V_1[c][d] = temp_sum[d];
-                            }
-                        }
-                    }
-                }
-
-                // 4. Compute V_start and write to contiguous tablebase memory
-                for (int d = 0; d < 401; ++d) {
-                    double sum = 0.0;
-                    for (int c = 0; c < 252; ++c) {
-                        sum += dice_data_.get_probability(c) * V_1[c][d];
-                    }
-                    uint64_t idx = (((static_cast<uint64_t>(mask) * 106 + u) * 2 + y) * 401 + d);
-                    data_vector_[idx] = std::min(1.0, std::max(0.0, sum));
-                }
+                for (int d = 0; d < NUM_D; ++d) dst[d] = std::min(1.0, std::max(0.0, dst[d]));
             }
         }
     }
@@ -378,7 +337,6 @@ void Tablebase::compute(int run_to_layer) {
 
     auto start_all = std::chrono::high_resolution_clock::now();
 
-    // Layer 0
     auto start_l0 = std::chrono::high_resolution_clock::now();
     compute_layer_0();
     auto end_l0 = std::chrono::high_resolution_clock::now();
@@ -390,13 +348,35 @@ void Tablebase::compute(int run_to_layer) {
         compute_layer(k);
         auto end_layer = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> diff = end_layer - start_layer;
-        std::cout << "Layer " << k << " computed in " << diff.count() << " seconds (masks: " 
+        std::cout << "Layer " << k << " computed in " << diff.count() << " seconds (masks: "
                   << masks_by_popcount_[k].size() << ")." << std::endl;
     }
 
     auto end_all = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff_all = end_all - start_all;
     std::cout << "Tablebase computation up to layer " << run_to_layer << " finished in " << diff_all.count() << " seconds.\n" << std::endl;
+}
+
+void Tablebase::fill_post_score(
+    const GameState& state,
+    const std::vector<std::pair<int, double>>& weights,
+    const std::vector<int>& open_categories,
+    double* post_score
+) const {
+    for (int c = 0; c < 252; ++c) {
+        for (int cat : open_categories) {
+            ScoreTransition t = score_table_.transition(
+                cat, c, state.upper_sum, state.yahtzee_scored == 1, 0);
+            const uint16_t next_mask = static_cast<uint16_t>(state.category_mask ^ (1u << cat));
+            const double* row = data_ + row_base(next_mask, t.next_upper_sum, t.next_yahtzee_scored);
+            const int r = t.score_to_beat_reduction;
+            double value = 0.0;
+            for (const auto& [d, w] : weights) {
+                value += w * row[d > r ? d - r : 0];
+            }
+            post_score[c * 13 + cat] = value;
+        }
+    }
 }
 
 int Tablebase::get_optimal_move(
@@ -407,113 +387,28 @@ int Tablebase::get_optimal_move(
     int& out_target_keep_mask,
     double& out_ev
 ) const {
-    int c = dice_data_.get_index(current_dice);
-    uint16_t mask = state.category_mask;
-    uint8_t u = state.upper_sum;
-    uint8_t y = state.yahtzee_scored;
-    uint16_t d = state.score_to_beat;
+    RankedMove moves[MAX_RANKED_MOVES];
+    const int count = get_ranked_moves(state, current_dice, rolls_left, moves);
 
-    std::vector<int> open_cats;
-    open_cats.reserve(13);
-    for (int cat = 0; cat < 13; ++cat) {
-        if ((mask >> cat) & 1) {
-            open_cats.push_back(cat);
-        }
+    const RankedMove* best_score = nullptr;
+    const RankedMove* best_keep = nullptr;
+    for (int i = 0; i < count; ++i) {
+        if (moves[i].action_type == 0 && !best_score) best_score = &moves[i];
+        if (moves[i].action_type == 1 && !best_keep) best_keep = &moves[i];
     }
 
-    // Compute best immediate scoring option
-    double best_score_val = -1.0;
-    int best_score_cat = -1;
-    for (int cat : open_cats) {
-        const Dice& dice = dice_data_.get_combinations()[c];
-        ScoreTransition transition = apply_score_transition(cat, dice, u, y == 1, d);
-
-        uint16_t next_mask = mask ^ (1 << cat);
-        uint64_t next_idx = (((static_cast<uint64_t>(next_mask) * 106 + transition.next_upper_sum) * 2 + transition.next_yahtzee_scored) * 401 + transition.next_score_to_beat);
-        double val = data_[next_idx]; // Read from mapping pointer
-        if (val > best_score_val) {
-            best_score_val = val;
-            best_score_cat = cat;
-        }
-    }
-
-    if (rolls_left == 0) {
-        out_target_cat_idx = best_score_cat;
-        out_target_keep_mask = 0;
-        out_ev = best_score_val;
-        return 0; // score
-    }
-
-    // Compute V_score for all 252 combinations in this state
-    std::vector<double> V_score(252, 0.0);
-    for (int c_idx = 0; c_idx < 252; ++c_idx) {
-        double max_val = -1.0;
-        bool is_y_roll = is_yahtzee_[c_idx];
-        for (int cat : open_cats) {
-            (void)is_y_roll;
-            const Dice& dice = dice_data_.get_combinations()[c_idx];
-            ScoreTransition transition = apply_score_transition(cat, dice, u, y == 1, d);
-
-            uint16_t next_mask = mask ^ (1 << cat);
-            uint64_t next_idx = (((static_cast<uint64_t>(next_mask) * 106 + transition.next_upper_sum) * 2 + transition.next_yahtzee_scored) * 401 + transition.next_score_to_beat);
-            double val = data_[next_idx]; // Read from mapping pointer
-            if (val > max_val) {
-                max_val = val;
-            }
-        }
-        V_score[c_idx] = max_val;
-    }
-
-    std::vector<double> current_values;
-    if (rolls_left == 1) {
-        current_values = V_score;
-    } else { // rolls_left == 2
-        // We need to compute V_2 for all 252 combinations in this state
-        std::vector<double> V_2(252, 0.0);
-        for (int c_idx = 0; c_idx < 252; ++c_idx) {
-            const auto& unique_masks = unique_masks_by_dice_[c_idx];
-            double max_val = 0.0;
-            for (int m : unique_masks) {
-                double sum = 0.0;
-                for (const auto& entry : sparse_transitions_[c_idx * 32 + m]) {
-                    sum += entry.prob * V_score[entry.next_c];
-                }
-                if (sum > max_val) {
-                    max_val = sum;
-                }
-            }
-            V_2[c_idx] = max_val;
-        }
-        current_values = V_2;
-    }
-
-    // Now evaluate all 32 keep masks for our current roll `c` using `current_values`
-    double best_keep_val = -1.0;
-    int best_keep_mask = -1;
-    for (int m = 0; m < 32; ++m) {
-        double sum = 0.0;
-        for (const auto& entry : sparse_transitions_[c * 32 + m]) {
-            sum += entry.prob * current_values[entry.next_c];
-        }
-        if (sum > best_keep_val) {
-            best_keep_val = sum;
-            best_keep_mask = m;
-        }
-    }
-
-    // Compare best keep option with best immediate scoring option
+    // Prefer keeping unless scoring is strictly better (original tie rule).
     constexpr double TIE_EPSILON = 1e-12;
-    if (best_score_val > best_keep_val + TIE_EPSILON) {
-        out_target_cat_idx = best_score_cat;
+    if (best_score && (!best_keep || best_score->wp > best_keep->wp + TIE_EPSILON)) {
+        out_target_cat_idx = best_score->target_idx;
         out_target_keep_mask = 0;
-        out_ev = best_score_val;
-        return 0; // score
-    } else {
-        out_target_cat_idx = -1;
-        out_target_keep_mask = best_keep_mask;
-        out_ev = best_keep_val;
-        return 1; // keep
+        out_ev = best_score->wp;
+        return 0;
     }
+    out_target_cat_idx = -1;
+    out_target_keep_mask = best_keep ? best_keep->target_idx : -1;
+    out_ev = best_keep ? best_keep->wp : 0.0;
+    return 1;
 }
 
 int Tablebase::get_ranked_moves(
@@ -522,97 +417,36 @@ int Tablebase::get_ranked_moves(
     int rolls_left,
     RankedMove* out_moves
 ) const {
-    int c = dice_data_.get_index(current_dice);
-    uint16_t mask = state.category_mask;
-    uint8_t u = state.upper_sum;
-    uint8_t y = state.yahtzee_scored;
-    uint16_t d = state.score_to_beat;
+    const std::vector<int> open = open_categories_of(state.category_mask);
+    std::vector<double> post_score(252 * 13, 0.0);
+    fill_post_score(state, {{static_cast<int>(state.score_to_beat), 1.0}}, open, post_score.data());
+    return rank_turn_actions(
+        keep_engine_, post_score.data(), open, dice_data_.get_index(current_dice), rolls_left, true, out_moves);
+}
 
-    std::vector<int> open_cats;
-    open_cats.reserve(13);
-    for (int cat = 0; cat < 13; ++cat) {
-        if ((mask >> cat) & 1) {
-            open_cats.push_back(cat);
+int Tablebase::get_ranked_moves_weighted(
+    const GameState& state,
+    const double* weights,
+    const Dice& current_dice,
+    int rolls_left,
+    RankedMove* out_moves
+) const {
+    std::vector<std::pair<int, double>> nonzero;
+    double total = 0.0;
+    for (int d = 0; d < NUM_D; ++d) {
+        if (weights[d] > 0.0) {
+            nonzero.emplace_back(d, weights[d]);
+            total += weights[d];
         }
     }
+    if (nonzero.empty() || !(total > 0.0)) return -1;
+    for (auto& entry : nonzero) entry.second /= total;
 
-    std::vector<RankedMove> moves;
-
-    // 1. Evaluate all legal scoring actions
-    for (int cat : open_cats) {
-        const Dice& dice = dice_data_.get_combinations()[c];
-        ScoreTransition transition = apply_score_transition(cat, dice, u, y == 1, d);
-
-        uint16_t next_mask = mask ^ (1 << cat);
-        uint64_t next_idx = (((static_cast<uint64_t>(next_mask) * 106 + transition.next_upper_sum) * 2 + transition.next_yahtzee_scored) * 401 + transition.next_score_to_beat);
-        double wp = data_[next_idx];
-        moves.push_back({0, cat, wp});
-    }
-
-    // 2. Evaluate all legal unique keep actions (if rolls left)
-    if (rolls_left > 0) {
-        // Compute V_score for all 252 combinations in this state
-        std::vector<double> V_score(252, 0.0);
-        for (int c_idx = 0; c_idx < 252; ++c_idx) {
-            double max_val = -1.0;
-            for (int cat : open_cats) {
-                const Dice& dice = dice_data_.get_combinations()[c_idx];
-                ScoreTransition transition = apply_score_transition(cat, dice, u, y == 1, d);
-
-                uint16_t next_mask = mask ^ (1 << cat);
-                uint64_t next_idx = (((static_cast<uint64_t>(next_mask) * 106 + transition.next_upper_sum) * 2 + transition.next_yahtzee_scored) * 401 + transition.next_score_to_beat);
-                double val = data_[next_idx];
-                if (val > max_val) {
-                    max_val = val;
-                }
-            }
-            V_score[c_idx] = max_val;
-        }
-
-        std::vector<double> current_values;
-        if (rolls_left == 1) {
-            current_values = V_score;
-        } else { // rolls_left == 2
-            std::vector<double> V_2(252, 0.0);
-            for (int c_idx = 0; c_idx < 252; ++c_idx) {
-                const auto& unique_masks = unique_masks_by_dice_[c_idx];
-                double max_val = 0.0;
-                for (int m : unique_masks) {
-                    double sum = 0.0;
-                    for (const auto& entry : sparse_transitions_[c_idx * 32 + m]) {
-                        sum += entry.prob * V_score[entry.next_c];
-                    }
-                    if (sum > max_val) {
-                        max_val = sum;
-                    }
-                }
-                V_2[c_idx] = max_val;
-            }
-            current_values = V_2;
-        }
-
-        const auto& unique_masks = unique_masks_by_dice_[c];
-        for (int m : unique_masks) {
-            double sum = 0.0;
-            for (const auto& entry : sparse_transitions_[c * 32 + m]) {
-                sum += entry.prob * current_values[entry.next_c];
-            }
-            moves.push_back({1, m, sum});
-        }
-    }
-
-    // Sort moves descending by WP
-    std::sort(moves.begin(), moves.end(), [](const RankedMove& a, const RankedMove& b) {
-        return a.wp > b.wp;
-    });
-
-    // Populate output array
-    int count = static_cast<int>(moves.size());
-    for (int i = 0; i < count; ++i) {
-        out_moves[i] = moves[i];
-    }
-
-    return count;
+    const std::vector<int> open = open_categories_of(state.category_mask);
+    std::vector<double> post_score(252 * 13, 0.0);
+    fill_post_score(state, nonzero, open, post_score.data());
+    return rank_turn_actions(
+        keep_engine_, post_score.data(), open, dice_data_.get_index(current_dice), rolls_left, false, out_moves);
 }
 
 bool Tablebase::save(const std::string& filepath, int solved_layer) const {
