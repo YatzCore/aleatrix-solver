@@ -1,12 +1,22 @@
 name: Release
 
-# Pushing a version tag (for example v1.1.0) builds the Windows runtime,
-# runs every test suite, packages the prebuilt ZIP, and publishes a GitHub
-# release whose notes come from docs/releases/<tag>.md.
+# Pushing a version tag (for example v1.1.0), or running this workflow
+# manually with a version, builds the Windows runtime, runs every test suite,
+# packages the prebuilt ZIP, and publishes a GitHub release whose notes come
+# from docs/releases/<version>.md. A manual run creates the tag on the
+# workflow's commit.
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag to create and release, for example v1.1.0"
+        required: true
+
+env:
+  VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
 
 permissions:
   contents: write
@@ -40,14 +50,14 @@ jobs:
         run: .\cpp\build\Release\yahtzee_core_tests.exe
 
       - name: Package release ZIP
-        run: python scripts/build_windows_release.py --version ${{ github.ref_name }}
+        run: python scripts/build_windows_release.py --version ${{ env.VERSION }}
 
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: >
-          gh release create ${{ github.ref_name }}
-          dist/aleatrix-solver-${{ github.ref_name }}-windows-x64.zip
-          --title "Aleatrix Solver ${{ github.ref_name }}"
-          --notes-file docs/releases/${{ github.ref_name }}.md
-          --verify-tag
+          gh release create ${{ env.VERSION }}
+          dist/aleatrix-solver-${{ env.VERSION }}-windows-x64.zip
+          --title "Aleatrix Solver ${{ env.VERSION }}"
+          --notes-file docs/releases/${{ env.VERSION }}.md
+          --target ${{ github.sha }}
