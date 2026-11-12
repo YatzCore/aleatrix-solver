@@ -14,6 +14,10 @@ on:
       version:
         description: "Version tag to create and release, for example v1.1.0"
         required: true
+      replace:
+        description: "Delete an existing release and tag with this version first"
+        type: boolean
+        default: false
 
 env:
   VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
@@ -51,6 +55,12 @@ jobs:
 
       - name: Package release ZIP
         run: python scripts/build_windows_release.py --version ${{ env.VERSION }}
+
+      - name: Remove existing release
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.replace }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete ${{ env.VERSION }} --cleanup-tag --yes
 
       - name: Publish GitHub release
         env:
