@@ -44,3 +44,7 @@ cpp/tablebase.bin
 *.pdb
 *.ilk
 *partial-test*
+
+# Linux/macOS shared libraries (cpp/ev_table.bin is covered by *.bin)
+*.so
+*.dylib

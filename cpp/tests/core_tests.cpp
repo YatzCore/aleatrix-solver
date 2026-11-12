@@ -2,6 +2,8 @@
 #include "yahtzee/scoring.hpp"
 #include "yahtzee/state.hpp"
 #include "yahtzee/tablebase.hpp"
+#include "yahtzee/keep_engine.hpp"
+#include "yahtzee/ev_table.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -9,7 +11,9 @@
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
+#include <set>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -174,6 +178,93 @@ void test_dice_transition_rows() {
     }
 }
 
+
+void test_keep_engine_matches_transition_matrix() {
+    yahtzee::DiceData dice_data;
+    yahtzee::TransitionMatrix transition_matrix(dice_data);
+    yahtzee::KeepEngine engine(dice_data);
+
+    require(engine.transition_count() == 4368, "462 kept multisets should reach 4368 outcomes");
+
+    // An arbitrary value per roll.
+    std::vector<double> values(252);
+    for (int c = 0; c < 252; ++c) values[c] = std::sin(0.37 * c + 1.0);
+    std::vector<double> keep_rows(yahtzee::KeepEngine::NUM_KEEPS);
+    engine.expect(values.data(), 1, keep_rows.data());
+
+    const auto& combinations = dice_data.get_combinations();
+    int unique_pairs = 0;
+    for (int c = 0; c < 252; ++c) {
+        // Representative masks: first mask (ascending) producing each kept multiset.
+        std::set<int> seen;
+        std::vector<int> expected_masks;
+        for (int m = 0; m < 32; ++m) {
+            int encoded = 0;
+            for (int i = 0; i < 5; ++i) {
+                if ((m >> i) & 1) encoded = encoded * 10 + combinations[c][i];
+            }
+            if (seen.insert(encoded).second) expected_masks.push_back(m);
+        }
+        require(engine.masks_of(c) == expected_masks, "representative keep masks should match");
+        unique_pairs += static_cast<int>(expected_masks.size());
+
+        const auto& ids = engine.keeps_of(c);
+        for (size_t i = 0; i < ids.size(); ++i) {
+            double direct = 0.0;
+            for (int next = 0; next < 252; ++next) {
+                direct += transition_matrix.get_transition(c, expected_masks[i], next) * values[next];
+            }
+            require_close(keep_rows[ids[i]], direct, "keep expectation should match the transition matrix");
+        }
+    }
+    require(unique_pairs == 4368, "there should be 4368 distinct (roll, keep) pairs");
+}
+
+const yahtzee::EvTable& shared_ev_table() {
+    static yahtzee::DiceData dice_data;
+    static yahtzee::KeepEngine engine(dice_data);
+    static yahtzee::EvTable ev(dice_data, engine);
+    return ev;
+}
+
+void test_ev_table_known_values() {
+    const yahtzee::EvTable& ev = shared_ev_table();
+
+    const double p_yahtzee = 2783176.0 / 60466176.0; // P(Yahtzee in 3 rolls, optimal keeps)
+    require_close(ev.mean(1u << yahtzee::CATEGORY_CHANCE, 0, false), 70.0 / 3.0, "chance-only EV");
+    require_close(ev.mean(1u << yahtzee::CATEGORY_YAHTZEE, 0, false), 50.0 * p_yahtzee, "yahtzee-only EV");
+    require_close(ev.mean(1u << yahtzee::CATEGORY_SIXES, 0, false), 30.0 * 91.0 / 216.0, "sixes-only EV");
+    require_close(
+        ev.second_moment(1u << yahtzee::CATEGORY_YAHTZEE, 0, false),
+        2500.0 * p_yahtzee,
+        "yahtzee-only second moment"
+    );
+
+    // Sixes with 60 already banked: any sixes at all also earn the 35-point bonus.
+    require(ev.mean(1u << yahtzee::CATEGORY_SIXES, 60, false) > ev.mean(1u << yahtzee::CATEGORY_SIXES, 0, false),
+            "upper bonus should raise the expected value near 63");
+
+    const double full = ev.mean(8191, 0, false);
+    require(std::abs(full - 254.609) < 0.01, "full-game EV regression (got " + std::to_string(full) + ")");
+}
+
+void test_ev_ranked_moves() {
+    const yahtzee::EvTable& ev = shared_ev_table();
+    yahtzee::RankedMove moves[yahtzee::MAX_RANKED_MOVES];
+
+    const uint16_t yahtzee_only = 1u << yahtzee::CATEGORY_YAHTZEE;
+    int count = ev.get_ranked_moves(yahtzee_only, 0, false, yahtzee::Dice{6, 6, 6, 6, 6}, 2, moves);
+    require(count > 0 && moves[0].action_type == 0 && moves[0].target_idx == yahtzee::CATEGORY_YAHTZEE,
+            "a rolled Yahtzee should be scored");
+    require_close(moves[0].wp, 50.0, "scored Yahtzee value");
+
+    count = ev.get_ranked_moves(yahtzee_only, 0, false, yahtzee::Dice{1, 1, 1, 2, 3}, 2, moves);
+    require(moves[0].action_type == 1 && moves[0].target_idx == 0b00111, "keep the three ones");
+    for (int i = 0; i < count; ++i) {
+        require(!(moves[i].action_type == 1 && moves[i].target_idx == 31), "keep-all should be omitted");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -185,6 +276,9 @@ int main() {
         test_metadata_rejects_partial_layer();
         test_metadata_rejects_missing_scoring_rules_version();
         test_dice_transition_rows();
+        test_keep_engine_matches_transition_matrix();
+        test_ev_table_known_values();
+        test_ev_ranked_moves();
     } catch (const std::exception& ex) {
         std::cerr << "[FAILED] " << ex.what() << std::endl;
         return 1;

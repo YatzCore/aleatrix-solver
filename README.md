@@ -35,6 +35,19 @@ legacy fallback policy remains available as a compatibility option:
 python -u yahtzee_bot.py --solver-mode hybrid
 ```
 
+The `mixture` mode replaces the single guessed target score with a probability
+distribution over the opponent's final score, built from the opponent's actual
+scorecard and the exact expected-score table. Every move is ranked by its win
+probability averaged over that distribution, and exact ties are broken by the
+exact expected score:
+
+```powershell
+python -u yahtzee_bot.py --solver-mode mixture
+```
+
+The first mixture run builds the 16 MB expected-score table (`cpp/ev_table.bin`)
+in a few seconds and reuses it afterwards.
+
 ## Architecture
 
 ```mermaid
@@ -53,6 +66,8 @@ graph TD
 
 - C++ win-probability tablebase engine for 696,418,304 encoded game states.
 - Default unified solver that maximizes EV inside a dynamic tablebase WP window.
+- Mixture solver that averages win probability over the opponent's final-score distribution.
+- Exact single-player expected-score table (mean and variance for every scorecard state).
 - Legacy hybrid solver available as an explicit compatibility mode.
 - Local simulator for strategy testing and opponent-score validation.
 - Playwright browser controller with a live overlay and human-paced actions.
@@ -156,6 +171,13 @@ Run C++ tests after building:
 .\cpp\build\Release\yahtzee_core_tests.exe
 ```
 
+Run a paired head-to-head evaluation against a simulated opponent that plays
+its own dice (unified vs mixture vs pure expected-score play):
+
+```powershell
+python scripts/run_mixture_evaluation.py --games 4000 --policies unified,mixture,ev
+```
+
 Run a paired unified-policy evaluation:
 
 ```powershell
@@ -177,8 +199,10 @@ cmake --build cpp/build --config Release
 .\cpp\build\Release\yahtzee_core.exe --layers 13 --output cpp/tablebase.bin
 ```
 
-On a high-core desktop this can still take hours. On slower machines it can take
-much longer, which is why the Hugging Face artifact exists.
+The generator evaluates each reroll once per distinct kept-dice multiset (462 of
+them) instead of once per roll and keep mask, which makes it about 40x faster
+than earlier versions while producing bit-identical output. Expect well under an
+hour on a 4-core machine; the Hugging Face artifact remains the quickest path.
 
 Prepare release metadata for a regenerated tablebase:
 

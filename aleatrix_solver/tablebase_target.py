@@ -13,6 +13,19 @@ TABLEBASE_SCRATCH_FALLBACK_THRESHOLD = 0.05
 TABLEBASE_SCRATCH_FALLBACK_MIN_GAIN = 12
 
 
+def compute_tablebase_score_to_beat(target_final_score, player_total_score, upper_sum):
+    """Points still needed to finish strictly above target_final_score.
+
+    Upper-section points (and the upper bonus) are excluded from the banked
+    total because the tablebase adds them back at the end of the game.
+    """
+    clean_upper_sum = max(0, min(105, int(upper_sum)))
+    upper_bonus = 35 if clean_upper_sum >= 63 else 0
+    already_bankable_lower_score = int(player_total_score) - clean_upper_sum - upper_bonus
+    score_to_beat = int(math.ceil(float(target_final_score))) + 1 - already_bankable_lower_score
+    return max(0, min(400, score_to_beat))
+
+
 def choose_tablebase_target_score(projected_opponent_score=None, target_score=None, opponent_score=0):
     for candidate in (projected_opponent_score, target_score, opponent_score):
         if candidate is not None:

@@ -2,12 +2,12 @@ import os
 import unittest
 
 from aleatrix_solver.yahtzee_ai import CATEGORIES
-from yahtzee_bot import TablebaseAI, is_tablebase_ready
+from yahtzee_bot import TablebaseAI, default_library_path, is_tablebase_ready
 
 
 class LiveTablebasePolicyTests(unittest.TestCase):
     def test_tablebase_defers_zero_scratch_when_rolls_remain(self):
-        dll_path = os.path.abspath(os.path.join(os.getcwd(), "cpp", "build", "Release", "yahtzee_core.dll"))
+        dll_path = default_library_path(os.getcwd())
         bin_path = os.path.abspath(os.path.join(os.getcwd(), "cpp", "tablebase.bin"))
         if not is_tablebase_ready(dll_path, bin_path):
             self.skipTest("complete C++ tablebase is not available")

@@ -2,7 +2,7 @@ import unittest
 import os
 from unittest.mock import patch
 from aleatrix_solver.yahtzee_ai import YahtzeeAI, CATEGORIES
-from yahtzee_bot import TablebaseAI, is_tablebase_ready
+from yahtzee_bot import TablebaseAI, default_library_path, is_tablebase_ready
 from yahtzee_simulator import play_solo_game
 
 
@@ -195,7 +195,7 @@ class UnifiedLivePathUnitTests(unittest.TestCase):
 class UnifiedEvaluatorTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.dll_path = os.path.abspath(os.path.join(os.getcwd(), "cpp", "build", "Release", "yahtzee_core.dll"))
+        cls.dll_path = default_library_path(os.getcwd())
         cls.bin_path = os.path.abspath(os.path.join(os.getcwd(), "cpp", "tablebase.bin"))
 
         if not is_tablebase_ready(cls.dll_path, cls.bin_path):

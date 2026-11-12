@@ -123,4 +123,33 @@ ScoreTransition apply_score_transition(
     };
 }
 
+ScoreTable::ScoreTable(const std::vector<Dice>& combinations) {
+    for (int c = 0; c < 252; ++c) {
+        is_yahtzee_[c] = is_yahtzee_roll(combinations[c]);
+        for (int y = 0; y < 2; ++y) {
+            for (int cat = 0; cat < 13; ++cat) {
+                scores_[y][cat][c] = score_category(cat, combinations[c], y == 1);
+            }
+        }
+    }
+}
+
+ScoreTransition ScoreTable::transition(int category, int c, int upper_sum, bool yahtzee_scored, int score_to_beat) const {
+    int score = scores_[yahtzee_scored ? 1 : 0][category][c];
+    bool upper = is_upper_category(category);
+    bool yahtzee_bonus = is_yahtzee_[c] && yahtzee_scored && category != CATEGORY_YAHTZEE;
+    int reduction = (upper ? 0 : score) + (yahtzee_bonus ? 100 : 0);
+    int next_upper_sum = upper ? std::min(105, upper_sum + score) : upper_sum;
+    uint8_t next_yahtzee_scored = static_cast<uint8_t>(
+        yahtzee_scored || (category == CATEGORY_YAHTZEE && score == 50)
+    );
+    return ScoreTransition{
+        score,
+        reduction,
+        next_upper_sum,
+        next_yahtzee_scored,
+        std::max(0, score_to_beat - reduction)
+    };
+}
+
 } // namespace yahtzee
