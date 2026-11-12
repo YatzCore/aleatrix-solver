@@ -28,7 +28,8 @@ add_executable(yahtzee_core
     src/ev_table.cpp
     src/main.cpp
 )
-target_link_libraries(yahtzee_core PRIVATE OpenMP::OpenMP_CXX Threads::Threads)
+target_link_libraries(yahtzee_core PRIVATE OpenMP::OpenMP_CXX)
+target_link_libraries(yahtzee_core PRIVATE Threads::Threads)
 
 # 2. Shared Library target (for Python ctypes integration)
 add_library(yahtzee_core_shared SHARED
